@@ -1,3 +1,5 @@
+[TOC]
+
 # 准备工作
 
 ## 系统配置
@@ -743,4 +745,1033 @@ int test(int a) {
 - 其它操作
   - 设置变量值：`set var 变量名=变量值 （循环中用的较多）`
   - 跳出循环：`until`
+
+## 文件IO
+
+### 说明
+
+- 本部分笔记及源码出自`slide/05 文件IO`
+
+- 在`Linux`中使用`man 2 API名`查看**Linux系统API**，`man 3 API名`查看**标准C库API**
+
+  - `man 2 open`
+
+    ![image-20210905161448175](01Linux系统编程入门/image-20210905161448175.png)
+
+  - `man 3 fopen`
+
+    ![image-20210905161518280](01Linux系统编程入门/image-20210905161518280.png)
+
+### 标准 C 库 IO 函数
+
+![image-20210905151717853](01Linux系统编程入门/image-20210905151717853.png)
+
+### 标准 C 库 IO 和 Linux 系统 IO 的关系
+
+![image-20210905151735234](01Linux系统编程入门/image-20210905151735234.png)
+
+### 虚拟地址空间
+
+- 虚拟地址空间是为了解决内存加载问题
+  - 问题1：假设实际内存为`4G`，此时共有`1G`、`2G`、`2G`三个程序，如果直接加载，那么第三个程序由于内存不足而无法执行
+  - 问题2：当问题1的`1G`程序执行完后，释放内存，第三个程序可以执行，但此时内存空间不连续
+
+- 对于32位机器来说，大小约为$2^{32}$，即`4G`左右，对于64位机器来说，，大小约为$2^{48}$，即`256T`左右
+- 通过`CPU中的MMU(内存管理单元)`将虚拟内存地址映射到物理内存地址上
+
+![image-20210905151755982](01Linux系统编程入门/image-20210905151755982.png)
+
+### 文件描述符
+
+- 文件描述符表是一个**数组**，为了一个进程能够同时操作多个文件
+- 文件描述符表默认大小：1024
+
+![image-20210905160958789](01Linux系统编程入门/image-20210905160958789.png)
+
+### Linux 系统 IO 函数
+
+#### open & close
+
+- `int open(const char *pathname, int flags);`
+
+  ```c
+  /*
+      #include <sys/types.h>
+      #include <sys/stat.h>
+      #include <fcntl.h>
+  
+      // 打开一个已经存在的文件
+      int open(const char *pathname, int flags);
+          参数：
+              - pathname：要打开的文件路径
+              - flags：对文件的操作权限设置还有其他的设置
+                O_RDONLY,  O_WRONLY,  O_RDWR  这三个设置是互斥的
+          返回值：返回一个新的文件描述符，如果调用失败，返回-1
+  
+      errno：属于Linux系统函数库，库里面的一个全局变量，记录的是最近的错误号。
+  
+      #include <stdio.h>
+      void perror(const char *s);作用：打印errno对应的错误描述
+          参数s：用户描述，比如hello, 最终输出的内容是  hello:xxx(实际的错误描述)
+  */
+  
+  #include <stdio.h>
+  // 系统宏
+  #include <sys/types.h>
+  #include <sys/stat.h>
+  // fopen函数声明头文件
+  #include <fcntl.h>
+  // close函数声明头文件
+  #include <unistd.h>
+  
+  int main() 
+  {
+      // 打开一个文件
+      int fd = open("a.txt", O_RDONLY);
+  
+      if(fd == -1) {
+          perror("open");
+      }
+      // 读写操作
+  
+      // 关闭
+      close(fd);
+  
+      return 0;
+  }
+  ```
+
+- `int open(const char *pathname, int flags, mode_t mode);`
+
+  ```c
+  /*
+      #include <sys/types.h>
+      #include <sys/stat.h>
+      #include <fcntl.h>
+  
+      int open(const char *pathname, int flags, mode_t mode);
+          参数：
+              - pathname：要创建的文件的路径
+              - flags：对文件的操作权限和其他的设置
+                  - 必选项：O_RDONLY,  O_WRONLY, O_RDWR  这三个之间是互斥的
+                  - 可选项：O_CREAT 文件不存在，创建新文件
+                  - flags参数是一个int类型的数据，占4个字节，32位，每一位就是一个标志位，所以用 | 可以保证能够实现多个操作
+              - mode：八进制的数，表示创建出的新的文件的操作权限，比如：0775
+              最终的权限是：mode & ~umask
+              0777   ->   111111111
+          &   0775   ->   111111101
+          ----------------------------
+                          111111101
+          按位与：0和任何数都为0
+          umask的作用就是抹去某些权限, 可以直接在终端输入 umask 查看默认值
+  */
+  #include <sys/types.h>
+  #include <sys/stat.h>
+  #include <fcntl.h>
+  #include <unistd.h>
+  #include <stdio.h>
+  
+  int main() 
+  {
+      // 创建一个新的文件
+      int fd = open("create.txt", O_RDWR | O_CREAT, 0777);
+  
+      if(fd == -1) {
+          perror("open");
+      }
+  
+      // 关闭
+      close(fd);
+  
+      return 0;
+  }
+  ```
+
+- `int close(int fd);`
+
+#### read & write
+
+- `ssize_t read(int fd, void *buf, size_t count);`
+- `ssize_t write(int fd, const void *buf, size_t count);`
+
+```c
+/*  
+    #include <unistd.h>
+    ssize_t read(int fd, void *buf, size_t count);
+        参数：
+            - fd：文件描述符，open得到的，通过这个文件描述符操作某个文件
+            - buf：需要读取数据存放的地方，数组的地址（传出参数）
+            - count：指定的数组的大小
+        返回值：
+            - 成功：
+                >0: 返回实际的读取到的字节数
+                =0：文件已经读取完了
+            - 失败：-1 ，并且设置errno
+
+    #include <unistd.h>
+    ssize_t write(int fd, const void *buf, size_t count);
+        参数：
+            - fd：文件描述符，open得到的，通过这个文件描述符操作某个文件
+            - buf：要往磁盘写入的数据，数据
+            - count：要写的数据的实际的大小
+        返回值：
+            成功：实际写入的字节数
+            失败：返回-1，并设置errno
+*/
+#include <unistd.h>
+#include <stdio.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+
+int main() 
+{
+    // 1.通过open打开english.txt文件
+    int srcfd = open("english.txt", O_RDONLY);
+    if(srcfd == -1) {
+        perror("open");
+        return -1;
+    }
+
+    // 2.创建一个新的文件（拷贝文件）
+    int destfd = open("cpy.txt", O_WRONLY | O_CREAT, 0664);
+    if(destfd == -1) {
+        perror("open");
+        return -1;
+    }
+
+    // 3.频繁的读写操作
+    char buf[1024] = {0};
+    int len = 0;
+    while((len = read(srcfd, buf, sizeof(buf))) > 0) {
+        write(destfd, buf, len);
+    }
+
+    // 4.关闭文件
+    close(destfd);
+    close(srcfd);
+
+
+    return 0;
+}
+```
+
+#### lseek
+
+- `off_t lseek(int fd, off_t offset, int whence);`
+
+```c
+/*  
+    标准C库的函数
+    #include <stdio.h>
+    int fseek(FILE *stream, long offset, int whence);
+
+    Linux系统函数
+    #include <sys/types.h>
+    #include <unistd.h>
+    off_t lseek(int fd, off_t offset, int whence);
+        参数：
+            - fd：文件描述符，通过open得到的，通过这个fd操作某个文件
+            - offset：偏移量
+            - whence:
+                SEEK_SET
+                    设置文件指针的偏移量
+                SEEK_CUR
+                    设置偏移量：当前位置 + 第二个参数offset的值
+                SEEK_END
+                    设置偏移量：文件大小 + 第二个参数offset的值
+        返回值：返回文件指针的位置
+
+    作用：
+        1.移动文件指针到文件头
+        lseek(fd, 0, SEEK_SET);
+
+        2.获取当前文件指针的位置
+        lseek(fd, 0, SEEK_CUR);
+
+        3.获取文件长度
+        lseek(fd, 0, SEEK_END);
+
+        4.拓展文件的长度，当前文件10b, 110b, 增加了100个字节
+        lseek(fd, 100, SEEK_END)
+        注意：需要写一次数据
+
+*/
+
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <stdio.h>
+
+int main() 
+{
+    int fd = open("hello.txt", O_RDWR);
+
+    if(fd == -1) {
+        perror("open");
+        return -1;
+    }
+
+    // 扩展文件的长度
+    int ret = lseek(fd, 100, SEEK_END);
+    if(ret == -1) {
+        perror("lseek");
+        return -1;
+    }
+
+    // 写入一个空数据，如果缺少，那么会扩展失败
+    write(fd, " ", 1);
+
+    // 关闭文件
+    close(fd);
+
+    return 0;
+}
+
+```
+
+- 扩展前
+
+  ![image-20210905182600860](01Linux系统编程入门/image-20210905182600860.png)
+
+- 扩展后（原先为5个字节，扩展100个字节，然后写入一个字节）
+
+  ![image-20210905182955313](01Linux系统编程入门/image-20210905182955313.png)
+
+#### stat & lstat(获取文件信息及软链接信息)
+
+- `int stat(const char *pathname, struct stat *statbuf);`
+
+- `int lstat(const char *pathname, struct stat *statbuf);`
+
+- Linux命令：`stat`
+
+  ![image-20210905184130981](01Linux系统编程入门/image-20210905184130981.png)
+
+- `stat`结构体
+
+  ```c
+  struct stat {
+      dev_t st_dev; // 文件的设备编号
+      ino_t st_ino; // 节点
+      mode_t st_mode; // 文件的类型和存取的权限
+      nlink_t st_nlink; // 连到该文件的硬连接数目
+      uid_t st_uid; // 用户ID
+      gid_t st_gid; // 组ID
+      dev_t st_rdev; // 设备文件的设备编号
+      off_t st_size; // 文件字节数(文件大小)
+      blksize_t st_blksize; // 块大小
+      blkcnt_t st_blocks; // 块数
+      time_t st_atime; // 最后一次访问时间
+      time_t st_mtime; // 最后一次修改时间
+      time_t st_ctime; // 最后一次改变时间(指属性)
+  };
+  ```
+
+  - `st_mode`
+
+    ![image-20210905184325137](01Linux系统编程入门/image-20210905184325137.png)
+
+```c
+/*
+    #include <sys/types.h>
+    #include <sys/stat.h>
+    #include <unistd.h>
+
+    int stat(const char *pathname, struct stat *statbuf);
+        作用：获取一个文件相关的一些信息
+        参数:
+            - pathname：操作的文件的路径
+            - statbuf：结构体变量，传出参数，用于保存获取到的文件的信息
+        返回值：
+            成功：返回0
+            失败：返回-1 设置errno
+
+    int lstat(const char *pathname, struct stat *statbuf);
+        参数:
+            - pathname：操作的文件的路径
+            - statbuf：结构体变量，传出参数，用于保存获取到的文件的信息
+        返回值：
+            成功：返回0
+            失败：返回-1 设置errno
+
+*/
+
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#include <stdio.h>
+
+int main() 
+{
+    struct stat statbuf;
+
+    int ret = stat("a.txt", &statbuf);
+
+    if(ret == -1) {
+        perror("stat");
+        return -1;
+    }
+
+    printf("size: %ld\n", statbuf.st_size);
+
+
+    return 0;
+}
+```
+
+#### 模拟实现`ls -l`
+
+```c
+#include <stdio.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#include <pwd.h>        // for getpwuid()
+#include <grp.h>        // for getgrgid()
+#include <time.h>       // for ctime()
+#include <string.h>     // for strncpy(), strlen()
+
+// 模拟实现 ls -l 指令
+// -rw-rw-r-- 1 nowcoder nowcoder 12 12月  3 15:48 a.txt
+int main(int argc, char * argv[]) 
+{
+    // 判断输入的参数是否正确
+    if(argc < 2) {
+        printf("%s filename\n", argv[0]);
+        return -1;
+    }
+
+    // 通过stat函数获取用户传入的文件的信息
+    struct stat st;
+    int ret = stat(argv[1], &st);
+    if(ret == -1) {
+        perror("stat");
+        return -1;
+    }
+
+    // 获取文件类型和文件权限
+    char perms[11] = {0};   // 用于保存文件类型和文件权限的字符串
+
+    switch(st.st_mode & S_IFMT) {
+        case S_IFLNK:
+            perms[0] = 'l';
+            break;
+        case S_IFDIR:
+            perms[0] = 'd';
+            break;
+        case S_IFREG:
+            perms[0] = '-';
+            break; 
+        case S_IFBLK:
+            perms[0] = 'b';
+            break; 
+        case S_IFCHR:
+            perms[0] = 'c';
+            break; 
+        case S_IFSOCK:
+            perms[0] = 's';
+            break;
+        case S_IFIFO:
+            perms[0] = 'p';
+            break;
+        default:
+            perms[0] = '?';
+            break;
+    }
+
+    // 判断文件的访问权限
+
+    // 文件所有者
+    perms[1] = (st.st_mode & S_IRUSR) ? 'r' : '-';
+    perms[2] = (st.st_mode & S_IWUSR) ? 'w' : '-';
+    perms[3] = (st.st_mode & S_IXUSR) ? 'x' : '-';
+
+    // 文件所在组
+    perms[4] = (st.st_mode & S_IRGRP) ? 'r' : '-';
+    perms[5] = (st.st_mode & S_IWGRP) ? 'w' : '-';
+    perms[6] = (st.st_mode & S_IXGRP) ? 'x' : '-';
+
+    // 其他人
+    perms[7] = (st.st_mode & S_IROTH) ? 'r' : '-';
+    perms[8] = (st.st_mode & S_IWOTH) ? 'w' : '-';
+    perms[9] = (st.st_mode & S_IXOTH) ? 'x' : '-';
+
+    // 硬连接数
+    int linkNum = st.st_nlink;
+
+    // 文件所有者
+    char* fileUser = getpwuid(st.st_uid)->pw_name;
+
+    // 文件所在组
+    char* fileGrp = getgrgid(st.st_gid)->gr_name;
+
+    // 文件大小
+    long int fileSize = st.st_size;
+
+    // 获取修改的时间
+    char* time = ctime(&st.st_mtime);
+
+    char mtime[512] = {0};
+    strncpy(mtime, time, strlen(time) - 1);
+
+    char buf[1024];
+    sprintf(buf, "%s %d %s %s %ld %s %s", perms, linkNum, fileUser, fileGrp, fileSize, mtime, argv[1]);
+
+    printf("%s\n", buf);
+
+    return 0;
+}
+```
+
+### 文件属性操作函数
+
+#### access
+
+- `int access(const char *pathname, int mode);`
+
+```c
+/*
+    #include <unistd.h>
+    int access(const char *pathname, int mode);
+        作用：判断某个文件是否有某个权限，或者判断文件是否存在
+        参数：
+            - pathname: 判断的文件路径
+            - mode:
+                R_OK: 判断是否有读权限
+                W_OK: 判断是否有写权限
+                X_OK: 判断是否有执行权限
+                F_OK: 判断文件是否存在
+        返回值：成功返回0， 失败返回-1
+*/
+
+#include <unistd.h>
+#include <stdio.h>
+
+int main() 
+{
+    int ret = access("a.txt", F_OK);
+    if(ret == -1) {
+        perror("access");
+    }
+
+    printf("文件存在！！!\n");
+
+    return 0;
+}
+```
+
+#### chmod & chown
+
+- `int chmod(const char *filename, int mode);`
+
+```c
+/*
+    #include <sys/stat.h>
+    int chmod(const char *pathname, mode_t mode);
+        修改文件的权限
+        参数：
+            - pathname: 需要修改的文件的路径
+            - mode:需要修改的权限值，八进制的数
+        返回值：成功返回0，失败返回-1
+
+*/
+#include <sys/stat.h>
+#include <stdio.h>
+int main() 
+{
+    int ret = chmod("a.txt", 0777);
+
+    if(ret == -1) {
+        perror("chmod");
+        return -1;
+    }
+
+    return 0;
+}
+```
+
+- `int chown(const char *path, uid_t owner, gid_t group);`
+  - 修改文件所有者
+  - 可使用`vim /etc/passwd`查看有哪些用户
+  - 可使用`vim /etc/group`查看有哪些组
+
+#### truncate
+
+- `int truncate(const char *path, off_t length);`
+
+```c
+/*
+    #include <unistd.h>
+    #include <sys/types.h>
+    int truncate(const char *path, off_t length);
+        作用：缩减或者扩展文件的尺寸至指定的大小
+        参数：
+            - path: 需要修改的文件的路径
+            - length: 需要最终文件变成的大小
+        返回值：
+            成功返回0， 失败返回-1
+*/
+
+#include <unistd.h>
+#include <sys/types.h>
+#include <stdio.h>
+
+int main() 
+{
+    int ret = truncate("b.txt", 5);
+
+    if(ret == -1) {
+        perror("truncate");
+        return -1;
+    }
+
+    return 0;
+}
+```
+
+### 目录操作函数
+
+#### mkdir
+
+- `int mkdir(const char *pathname, mode_t mode);`
+
+```c
+/*
+    #include <sys/stat.h>
+    #include <sys/types.h>
+    int mkdir(const char *pathname, mode_t mode);
+        作用：创建一个目录
+        参数：
+            pathname: 创建的目录的路径
+            mode: 权限，八进制的数
+        返回值：
+            成功返回0， 失败返回-1
+*/
+
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <stdio.h>
+
+int main() 
+{
+    int ret = mkdir("aaa", 0777);
+
+    if(ret == -1) {
+        perror("mkdir");
+        return -1;
+    }
+
+    return 0;
+}
+```
+
+#### rename
+
+- `int rename(const char *oldpath, const char *newpath);`
+
+```c
+/*
+    #include <stdio.h>
+    int rename(const char *oldpath, const char *newpath);
+
+*/
+#include <stdio.h>
+
+int main() 
+{
+    int ret = rename("aaa", "bbb");
+
+    if(ret == -1) {
+        perror("rename");
+        return -1;
+    }
+
+    return 0;
+}
+```
+
+#### chdir & getcwd
+
+- `int chdir(const char *path);`
+
+- `char *getcwd(char *buf, size_t size);`
+
+```c
+/*
+
+    #include <unistd.h>
+    int chdir(const char *path);
+        作用：修改进程的工作目录
+            比如在/home/nowcoder 启动了一个可执行程序a.out, 进程的工作目录 /home/nowcoder
+        参数：
+            path : 需要修改的工作目录
+
+    #include <unistd.h>
+    char *getcwd(char *buf, size_t size);
+        作用：获取当前工作目录
+        参数：
+            - buf : 存储的路径，指向的是一个数组（传出参数）
+            - size: 数组的大小
+        返回值：
+            返回的指向的一块内存，这个数据就是第一个参数
+
+*/
+#include <unistd.h>
+#include <stdio.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <fcntl.h>
+
+int main() 
+{
+    // 获取当前的工作目录
+    char buf[128];
+    getcwd(buf, sizeof(buf));
+    printf("当前的工作目录是：%s\n", buf);
+
+    // 修改工作目录
+    int ret = chdir("/home/u/Desktop/Linux/test");
+    if(ret == -1) {
+        perror("chdir");
+        return -1;
+    } 
+
+    // 创建一个新的文件
+    int fd = open("chdir.txt", O_CREAT | O_RDWR, 0664);
+    if(fd == -1) {
+        perror("open");
+        return -1;
+    }
+
+    close(fd);
+
+    // 获取当前的工作目录
+    char buf1[128];
+    getcwd(buf1, sizeof(buf1));
+    printf("当前的工作目录是：%s\n", buf1);
+    
+    return 0;
+}
+```
+
+### 目录遍历函数
+
+- 打开一个目录：`DIR *opendir(const char *name);`
+
+- 读取目录中的数据：`struct dirent *readdir(DIR *dirp);`
+
+- 关闭目录：`int closedir(DIR *dirp);`
+
+- `dirent` 结构体和 `d_type`
+
+  ```c
+  struct dirent
+  {
+      // 此目录进入点的inode
+      ino_t d_ino; 
+      // 目录文件开头至此目录进入点的位移
+      off_t d_off; 
+      // d_name 的长度, 不包含NULL字符
+      unsigned short int d_reclen; 
+      // d_name 所指的文件类型
+      unsigned char d_type; 
+      // 文件名
+      char d_name[256];
+  };
+  ```
+
+  - `d_type`
+
+    ![image-20210908203416289](01Linux系统编程入门/image-20210908203416289.png)
+
+- **读取文件夹文件数目**实例
+
+  ```c
+  /*
+      // 打开一个目录
+      #include <sys/types.h>
+      #include <dirent.h>
+      DIR *opendir(const char *name);
+          参数：
+              - name: 需要打开的目录的名称
+          返回值：
+              DIR * 类型，理解为目录流
+              错误返回NULL
+  
+  
+      // 读取目录中的数据
+      #include <dirent.h>
+      struct dirent *readdir(DIR *dirp);
+          - 参数：dirp是opendir返回的结果
+          - 返回值：
+              struct dirent，代表读取到的文件的信息
+              读取到了末尾或者失败了，返回NULL
+  
+      // 关闭目录
+      #include <sys/types.h>
+      #include <dirent.h>
+      int closedir(DIR *dirp);
+  
+  */
+  #include <sys/types.h>
+  #include <dirent.h>
+  #include <stdio.h>
+  #include <string.h>
+  #include <stdlib.h>
+  
+  int getFileNum(const char * path);
+  
+  // 读取某个目录下所有的普通文件的个数
+  int main(int argc, char * argv[]) 
+  {
+      if(argc < 2) {
+          printf("%s path\n", argv[0]);
+          return -1;
+      }
+  
+      int num = getFileNum(argv[1]);
+  
+      printf("普通文件的个数为：%d\n", num);
+  
+      return 0;
+  }
+  
+  // 用于获取目录下所有普通文件的个数
+  int getFileNum(const char * path) {
+  
+      // 1.打开目录
+      DIR * dir = opendir(path);
+  
+      if(dir == NULL) {
+          perror("opendir");
+          exit(0);
+      }
+  
+      struct dirent *ptr;
+  
+      // 记录普通文件的个数
+      int total = 0;
+  
+      while((ptr = readdir(dir)) != NULL) {
+  
+          // 获取名称
+          char * dname = ptr->d_name;
+  
+          // 忽略掉. 和..
+          if(strcmp(dname, ".") == 0 || strcmp(dname, "..") == 0) {
+              continue;
+          }
+  
+          // 判断是否是普通文件还是目录
+          if(ptr->d_type == DT_DIR) {
+              // 目录,需要继续读取这个目录
+              char newpath[256];
+              sprintf(newpath, "%s/%s", path, dname);
+              total += getFileNum(newpath);
+          }
+  
+          if(ptr->d_type == DT_REG) {
+              // 普通文件
+              total++;
+          }
+      }
+  
+      // 关闭目录
+      closedir(dir);
+  
+      return total;
+  }
+  ```
+
+### 文件描述符之`dup`、`dup2`
+
+#### dup
+
+- `int dup(int oldfd);`
+- 复制文件描述符
+
+```c
+/*
+    #include <unistd.h>
+    int dup(int oldfd);
+        作用：复制一个新的文件描述符
+        fd=3, int fd1 = dup(fd),
+        fd指向的是a.txt, fd1也是指向a.txt
+        从空闲的文件描述符表中找一个最小的，作为新的拷贝的文件描述符
+
+
+*/
+
+#include <unistd.h>
+#include <stdio.h>
+#include <fcntl.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <string.h>
+
+int main() 
+{
+    int fd = open("a.txt", O_RDWR | O_CREAT, 0664);
+
+    int fd1 = dup(fd);
+
+    if(fd1 == -1) {
+        perror("dup");
+        return -1;
+    }
+
+    printf("fd : %d , fd1 : %d\n", fd, fd1);
+
+    close(fd);
+
+    char * str = "hello,world";
+    int ret = write(fd1, str, strlen(str));
+    if(ret == -1) {
+        perror("write");
+        return -1;
+    }
+
+    close(fd1);
+
+    return 0;
+}
+```
+
+#### dup2
+
+- `int dup2(int oldfd, int newfd);`
+- 重定向文件描述符
+
+```c
+/*
+    #include <unistd.h>
+    int dup2(int oldfd, int newfd);
+        作用：重定向文件描述符
+        oldfd 指向 a.txt, newfd 指向 b.txt
+        调用函数成功后：newfd 和 b.txt 做close, newfd 指向了 a.txt
+        oldfd 必须是一个有效的文件描述符
+        oldfd和newfd值相同，相当于什么都没有做
+*/
+#include <unistd.h>
+#include <stdio.h>
+#include <string.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <fcntl.h>
+
+int main() 
+{
+    int fd = open("1.txt", O_RDWR | O_CREAT, 0664);
+    if(fd == -1) {
+        perror("open");
+        return -1;
+    }
+
+    int fd1 = open("2.txt", O_RDWR | O_CREAT, 0664);
+    if(fd1 == -1) {
+        perror("open");
+        return -1;
+    }
+
+    printf("fd : %d, fd1 : %d\n", fd, fd1);
+
+    int fd2 = dup2(fd, fd1);
+    if(fd2 == -1) {
+        perror("dup2");
+        return -1;
+    }
+
+    // 通过fd1去写数据，实际操作的是1.txt，而不是2.txt
+    char * str = "hello, dup2";
+    int len = write(fd1, str, strlen(str));
+
+    if(len == -1) {
+        perror("write");
+        return -1;
+    }
+
+    printf("fd : %d, fd1 : %d, fd2 : %d\n", fd, fd1, fd2);
+
+    close(fd);
+    close(fd1);
+
+    return 0;
+}
+```
+
+### fcntl 函数
+
+- `int fcntl(int fd, int cmd, ... /* arg */ );`
+- **复制文件描述符**和**设置/获取文件的状态标志**
+
+```c
+/*
+
+    #include <unistd.h>
+    #include <fcntl.h>
+
+    int fcntl(int fd, int cmd, ...);
+    参数：
+        fd : 表示需要操作的文件描述符
+        cmd: 表示对文件描述符进行如何操作
+            - F_DUPFD : 复制文件描述符,复制的是第一个参数fd，得到一个新的文件描述符（返回值）
+                int ret = fcntl(fd, F_DUPFD);
+
+            - F_GETFL : 获取指定的文件描述符文件状态flag
+              获取的flag和我们通过open函数传递的flag是一个东西。
+
+            - F_SETFL : 设置文件描述符文件状态flag
+              必选项：O_RDONLY, O_WRONLY, O_RDWR 不可以被修改
+              可选性：O_APPEND, O_NONBLOCK
+                O_APPEND 表示追加数据
+                NONBLOK 设置成非阻塞
+        
+        阻塞和非阻塞：描述的是函数调用的行为。
+*/
+
+#include <unistd.h>
+#include <fcntl.h>
+#include <stdio.h>
+#include <string.h>
+
+int main() 
+{
+    // 1.复制文件描述符
+    // int fd = open("1.txt", O_RDONLY);
+    // int ret = fcntl(fd, F_DUPFD);
+
+    // 2.修改或者获取文件状态flag
+    int fd = open("1.txt", O_RDWR);
+    if(fd == -1) {
+        perror("open");
+        return -1;
+    }
+
+    // 获取文件描述符状态flag
+    int flag = fcntl(fd, F_GETFL);
+    if(flag == -1) {
+        perror("fcntl");
+        return -1;
+    }
+    flag |= O_APPEND;   // flag = flag | O_APPEND
+
+    // 修改文件描述符状态的flag，给flag加入O_APPEND这个标记
+    int ret = fcntl(fd, F_SETFL, flag);
+    if(ret == -1) {
+        perror("fcntl");
+        return -1;
+    }
+
+    char * str = "nihao";
+    write(fd, str, strlen(str));
+
+    close(fd);
+
+    return 0;
+}
+```
+
+
 
