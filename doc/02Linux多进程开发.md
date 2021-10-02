@@ -350,3 +350,224 @@
 
 - 使进程脱离 GDB 调试：`detach inferiors Num`
 
+# exec函数族
+
+## 说明
+
+本部分笔记及源码出自`slide/02Linux多进程开发/04 exec函数族`
+
+## 基本概念
+
+- `exec 函数族`的作用是根据指定的文件名找到可执行文件，并用它来取代调用进程的内容，换句话说，就是**在调用进程内部执行一个可执行文件**
+- exec 函数族的函数执行成功后不会返回，因为调用进程的实体，包括代码段，数据段和堆栈等都已经被新的内容取代，只留下进程 ID 等一些表面上的信息仍保持原样，颇有些神似“三十六计”中的“金蝉脱壳”。看上去还是旧的躯壳，却已经注入了新的灵魂。只有调用失败了，它们才会返回 -1，从原程序的调用点接着往下执行
+
+- 用户区替换为`a.out`的内容，内核区不变
+
+  ![image-20211002090629048](02Linux多进程开发/image-20211002090629048.png)
+
+## 种类
+
+- 基本组件为`exec`，后面跟不同参数，代表不同含义
+
+  - `l(list) `：参数地址列表，以**空指针结尾**
+
+  - `v(vector) `：存有各参数地址的指针数组的地址
+
+  - `p(path) `：按 PATH 环境变量指定的目录搜索可执行文件，可用`env`查看现有的环境变量
+
+    ![image-20211002093521376](02Linux多进程开发/image-20211002093521376.png)
+
+  - `e(environment)`：存有环境变量字符串地址的指针数组的地址，增加新的环境变量
+
+- `exec`函数族属于C语言标准库函数，可使用`man 3 exec`查看说明
+
+  ![image-20211002092129575](02Linux多进程开发/image-20211002092129575.png)
+
+- 说明：下列示例程序除核心代码外，保持一致，初始包含文件有
+
+  ![image-20211002091926160](02Linux多进程开发/image-20211002091926160.png)
+
+- `int execl(const char *path, const char *arg, .../* (char *) NULL */);`
+
+  - `path`：需要指定的执行的文件的路径或者名称
+
+  - `arg`：是执行可执行文件所需要的参数列表。第一个参数一般没有什么作用，为了方便，一般写的是执行的程序的名称，从第二个参数开始往后，就是程序执行所需要的的参数列表，参数最后需要以NULL结束（哨兵）
+
+  - code
+
+    ```c
+    #include <unistd.h>
+    #include <stdio.h>
+    
+    int main() {
+    
+    
+        // 创建一个子进程，在子进程中执行exec函数族中的函数
+        pid_t pid = fork();
+    
+        if(pid > 0) {
+            // 父进程
+            printf("i am parent process, pid : %d\n",getpid());
+            // 如果不加这句，会存在孤儿进程，输出异常
+            sleep(1);
+        }else if(pid == 0) {
+            // 子进程
+            // 调用自己写的可执行程序
+            execl("/home/u/Desktop/Linux/hello","hello",NULL);
+    
+            // 调用系统进程
+            // execl("/bin/ps", "ps", "aux", NULL);
+            perror("execl");
+            printf("i am child process, pid : %d\n", getpid());
+    
+        }
+    
+        for(int i = 0; i < 3; i++) {
+            printf("i = %d, pid = %d\n", i, getpid());
+        }
+    
+    
+        return 0;
+    }
+    ```
+
+  - output
+
+    ![image-20211002092658778](02Linux多进程开发/image-20211002092658778.png)
+
+  - 说明：可以看到，子进程的内容（用户区）被替换，打印的是`hello`中的内容
+
+- `int execlp(const char *file, const char *arg, ... /* (char *) NULL */);`
+
+  - 会到环境变量中查找指定的可执行文件，如果找到了就执行，找不到就执行不成功
+
+  - `file`：只需要提供名称（不需要提供路径）
+
+  - code
+
+    ```c
+    #include <unistd.h>
+    #include <stdio.h>
+    
+    int main() {
+    
+    
+        // 创建一个子进程，在子进程中执行exec函数族中的函数
+        pid_t pid = fork();
+    
+        if(pid > 0) {
+            // 父进程
+            printf("i am parent process, pid : %d\n",getpid());
+            sleep(1);
+        }else if(pid == 0) {
+            // 子进程
+            execlp("ps", "ps", "aux", NULL);
+    
+            printf("i am child process, pid : %d\n", getpid());
+    
+        }
+    
+        for(int i = 0; i < 3; i++) {
+            printf("i = %d, pid = %d\n", i, getpid());
+        }
+    
+    
+        return 0;
+    }
+    ```
+
+  - output
+
+    ![image-20211002093005924](02Linux多进程开发/image-20211002093005924.png)
+
+- `int execle(const char *path, const char *arg, .../*, (char *) NULL, char * const envp[] */);`
+
+  - `envp`：添加路径至环境变量，注意以`NULL`结尾，否则报`execle: Bad address`
+
+  - code
+
+    ```c
+    #include <unistd.h>
+    #include <stdio.h>
+    
+    int main() {
+    
+    
+        // 创建一个子进程，在子进程中执行exec函数族中的函数
+        pid_t pid = fork();
+    
+        if(pid > 0) {
+            // 父进程
+            printf("i am parent process, pid : %d\n",getpid());
+            sleep(1);
+        }else if(pid == 0) {
+            // 子进程
+            // 需要已NULL结尾，否则报 execle: Bad address 错误
+            char* envp[] = {"/home/u/Desktop/Linux/", NULL};
+            execle("/home/u/Desktop/Linux/hello", "hello", NULL, envp);
+            perror("execle");
+            printf("i am child process, pid : %d\n", getpid());
+    
+        }
+    
+        for(int i = 0; i < 3; i++) {
+            printf("i = %d, pid = %d\n", i, getpid());
+        }
+    
+    
+        return 0;
+    }
+    ```
+
+  - output
+
+    ![image-20211002095344859](02Linux多进程开发/image-20211002095344859.png)
+
+- `int execv(const char *path, char *const argv[]);`
+
+  - `argv`：将运行参数都写在数组中
+
+  - code
+
+    ```c
+    #include <unistd.h>
+    #include <stdio.h>
+    
+    int main() {
+    
+    
+        // 创建一个子进程，在子进程中执行exec函数族中的函数
+        pid_t pid = fork();
+    
+        if(pid > 0) {
+            // 父进程
+            printf("i am parent process, pid : %d\n",getpid());
+            sleep(1);
+        }else if(pid == 0) {
+            // 子进程
+            char* argv[] = {"hello", NULL};
+            execv("/home/u/Desktop/Linux/hello", argv);
+            perror("execv");
+            printf("i am child process, pid : %d\n", getpid());
+    
+        }
+    
+        for(int i = 0; i < 3; i++) {
+            printf("i = %d, pid = %d\n", i, getpid());
+        }
+    
+    
+        return 0;
+    }
+    ```
+
+  - output
+
+    ![image-20211002095544288](02Linux多进程开发/image-20211002095544288.png)
+
+- ` int execvp(const char *file, char *const argv[]);`
+
+- `int execvpe(const char *file, char *const argv[], char *const envp[]);`
+
+- `int execve(const char *filename, char *const argv[], char *const envp[]);`
+
