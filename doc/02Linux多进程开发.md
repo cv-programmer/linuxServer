@@ -99,7 +99,7 @@
 
 ## 进程相关命令
 
-### 查看进程—静态
+### 查看进程-静态
 
 - `ps`命令用来查看进程（静态），可以使用`man ps`查看使用说明
 
@@ -203,6 +203,10 @@
 本部分笔记及源码出自`slide/02Linux多进程开发/03 进程创建`
 
 ## 进程创建：fork
+
+- 可通过`man 2 fork`查看帮助
+
+  ![image-20211002151951979](02Linux多进程开发/image-20211002151951979.png)
 
 - `pid_t fork(void);`
 
@@ -358,7 +362,12 @@
 
 ## 基本概念
 
+- 可通过`man 3 exec`查看帮助
+
+  ![image-20211002092129575](02Linux多进程开发/image-20211002092129575.png)
+
 - `exec 函数族`的作用是根据指定的文件名找到可执行文件，并用它来取代调用进程的内容，换句话说，就是**在调用进程内部执行一个可执行文件**
+
 - exec 函数族的函数执行成功后不会返回，因为调用进程的实体，包括代码段，数据段和堆栈等都已经被新的内容取代，只留下进程 ID 等一些表面上的信息仍保持原样，颇有些神似“三十六计”中的“金蝉脱壳”。看上去还是旧的躯壳，却已经注入了新的灵魂。只有调用失败了，它们才会返回 -1，从原程序的调用点接着往下执行
 
 - 用户区替换为`a.out`的内容，内核区不变
@@ -378,10 +387,6 @@
     ![image-20211002093521376](02Linux多进程开发/image-20211002093521376.png)
 
   - `e(environment)`：存有环境变量字符串地址的指针数组的地址，增加新的环境变量
-
-- `exec`函数族属于C语言标准库函数，可使用`man 3 exec`查看说明
-
-  ![image-20211002092129575](02Linux多进程开发/image-20211002092129575.png)
 
 - 说明：下列示例程序除核心代码外，保持一致，初始包含文件有
 
@@ -570,4 +575,317 @@
 - `int execvpe(const char *file, char *const argv[], char *const envp[]);`
 
 - `int execve(const char *filename, char *const argv[], char *const envp[]);`
+
+# 进程控制
+
+## 说明
+
+本部分笔记及源码出自`slide/02Linux多进程开发/05 进程控制`
+
+## 进程退出
+
+- 标准C库：`exit()`
+
+- Linux系统：`_exit()`
+
+- 区别
+
+  ![image-20211002102156043](02Linux多进程开发/image-20211002102156043.png)
+
+- 程序说明
+
+  - `exit()`
+
+    ![image-20211002102546106](02Linux多进程开发/image-20211002102546106.png)
+
+  - `_exit()`
+
+    ![image-20211002102641454](02Linux多进程开发/image-20211002102641454.png)
+
+  - 原因：调用`_exit`时没有刷新缓冲区，所以`world`还留在缓冲区中，没有被输出，`\n`会刷新缓冲区
+
+## 孤儿进程
+
+- 父进程运行结束，但子进程还在运行（未运行结束），这样的子进程就称为`孤儿进程（Orphan Process）`
+- 每当出现一个孤儿进程的时候，内核就把孤儿进程的父进程设置为 init ，而 init 进程会循环地 wait() 它的已经退出的子进程。
+- 孤儿进程并不会有什么危害
+
+```c
+#include <sys/types.h>
+#include <unistd.h>
+#include <stdio.h>
+
+int main() 
+{
+    // 创建子进程
+    pid_t pid = fork();
+    // 判断是父进程还是子进程
+    if(pid > 0) {
+        printf("i am parent process, pid : %d, ppid : %d\n", getpid(), getppid());
+    } else if(pid == 0) {
+        sleep(1);
+        // 当前是子进程
+        printf("i am child process, pid : %d, ppid : %d\n", getpid(),getppid());
+    }
+    // for循环
+    for(int i = 0; i < 3; i++) {
+        printf("i : %d , pid : %d\n", i , getpid());
+    }
+
+    return 0;
+}
+```
+
+![image-20211002105534145](02Linux多进程开发/image-20211002105534145.png)
+
+## 僵尸进程
+
+- 每个进程结束之后, 都会释放自己地址空间中的用户区数据，内核区的 PCB 没有办法自己释放掉，需要父进程去释放
+
+- 进程终止时，父进程尚未回收，子进程残留资源（PCB）存放于内核中，变成`僵尸（Zombie）进程`
+
+- **僵尸进程不能被 `kill -9` 杀死**，这样就会导致一个问题，如果父进程不调用 `wait()` 或 `waitpid()` 的话，那么保留的那段信息就不会释放，其进程号就会一直被占用，但是系统所能使用的进程号是有限的，如果大量的产生僵尸进程，将因为没有可用的进程号而导致系统不能产生新的进程，此即为僵尸进程的危害，应当避免
+
+- 示例
+
+  - code
+
+    ```c
+    #include <sys/types.h>
+    #include <unistd.h>
+    #include <stdio.h>
+    
+    int main() {
+    
+        // 创建子进程
+        pid_t pid = fork();
+    
+        // 判断是父进程还是子进程
+        if(pid > 0) {
+            while(1) {
+                printf("i am parent process, pid : %d, ppid : %d\n", getpid(), getppid());
+                sleep(1);
+            }
+    
+        } else if(pid == 0) {
+            // 当前是子进程
+            printf("i am child process, pid : %d, ppid : %d\n", getpid(),getppid());
+           
+        }
+    
+        // for循环
+        for(int i = 0; i < 3; i++) {
+            printf("i : %d , pid : %d\n", i , getpid());
+        }
+    
+        return 0;
+    }
+    ```
+
+  - 僵尸进程ID：45161，可以通过杀死父进程45160，从而使僵尸进程变为孤儿进程，让init领养进行释放
+
+    ![image-20211002110239941](02Linux多进程开发/image-20211002110239941.png)
+
+  - 释放后
+
+    ![image-20211002110519810](02Linux多进程开发/image-20211002110519810.png)
+
+## 进程回收
+
+### 基本概念
+
+-  在每个进程退出的时候，内核释放该进程所有的资源、包括打开的文件、占用的内存等。但是仍然为其保留一定的信息，这些信息主要主要指进程控制块PCB的信息（包括进程号、退出状态、运行时间等）
+- 父进程可以通过调用`wait`或`waitpid`得到它的退出状态同时彻底清除掉这个进程，查看帮助：`man 2 wait`
+- `wait()` 和 `waitpid()` 函数的功能一样，区别在于
+  - `wait()` 函数会阻塞
+  - `waitpid()` 可以设置是否阻塞，`waitpid()` 还可以指定等待哪个子进程结束
+- 注意：**一次`wait`或`waitpid`调用只能清理一个子进程，清理多个子进程应使用循环**
+
+### 退出信息相关宏函数
+
+- `WIFEXITED(status)`：非0，进程正常退出
+- `WEXITSTATUS(status)`：如果上宏为真，获取进程退出的状态（exit的参数）
+- `WIFSIGNALED(status)`：非0，进程异常终止
+- `WTERMSIG(status)`：如果上宏为真，获取使进程终止的信号编号
+- `WIFSTOPPED(status)`：非0，进程处于暂停状态
+- `WSTOPSIG(status)`：如果上宏为真，获取使进程暂停的信号的编号
+- `WIFCONTINUED(status)`：非0，进程暂停后已经继续运行
+
+### wait()
+
+- 可通过`man 2 wait`查看帮助
+
+  ![image-20211002152046247](02Linux多进程开发/image-20211002152046247.png)
+
+- `pid_t wait(int *wstatus);`
+
+  - 功能：等待任意一个子进程结束，如果任意一个子进程结束了，此函数会回收子进程的资源
+  - 参数
+    - `int *wstatus`：进程退出时的状态信息，传入的是一个int类型的地址，传出参数。
+
+  - 返回值
+    - 成功：返回被回收的子进程的id
+    - 失败：-1 (所有的子进程都结束，调用函数失败)
+
+- 其他说明
+
+  - 调用wait函数的进程会被挂起（阻塞），直到它的一个子进程退出或者收到一个不能被忽略的信号时才被唤醒（相当于继续往下执行）
+  - 如果没有子进程了，函数立刻返回，返回-1；如果子进程都已经结束了，也会立即返回，返回-1
+
+```c
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <stdio.h>
+#include <unistd.h>
+#include <stdlib.h>
+
+int main() 
+{
+    // 有一个父进程，创建5个子进程（兄弟）
+    pid_t pid;
+
+    // 创建5个子进程
+    for(int i = 0; i < 5; i++) {
+        pid = fork();
+        // 避免嵌套重复生成子进程
+        if(pid == 0) {
+            break;
+        }
+    }
+
+    if(pid > 0) {
+        // 父进程
+        while(1) {
+            printf("parent, pid = %d\n", getpid());
+            // int ret = wait(NULL);
+            int st;
+            int ret = wait(&st);
+
+            if(ret == -1) {
+                break;
+            }
+
+            if(WIFEXITED(st)) {
+                // 是不是正常退出
+                printf("退出的状态码：%d\n", WEXITSTATUS(st));
+            }
+            if(WIFSIGNALED(st)) {
+                // 是不是异常终止
+                printf("被哪个信号干掉了：%d\n", WTERMSIG(st));
+            }
+
+            printf("child die, pid = %d\n", ret);
+
+            sleep(1);
+        }
+
+    } else if (pid == 0){
+        // 子进程
+         while(1) {
+            printf("child, pid = %d\n",getpid());    
+            sleep(1);       
+         }
+
+        exit(0);
+    }
+
+    return 0; // exit(0)
+}
+```
+
+- 程序开始执行
+
+  ![image-20211002150658401](02Linux多进程开发/image-20211002150658401.png)
+
+- 通过命令杀死子进程：`kill -9 47548`
+
+  ![image-20211002150754497](02Linux多进程开发/image-20211002150754497.png)
+
+### waitpid()
+
+- 可通过`man 2 wait`查看帮助
+
+  ![image-20211002152139398](02Linux多进程开发/image-20211002152139398.png)
+
+- `pid_t waitpid(pid_t pid, int *wstatus, int options);`
+  - 功能：回收指定进程号的子进程，可以设置是否阻塞
+  - 参数
+    - `pid`
+      - `pid > 0` : 回收某个子进程的pid
+      - `pid = 0` : 回收当前进程组的所有子进程
+      - `pid = -1` : 回收所有的子进程，相当于 wait() （最常用）
+      - `pid < -1` : 某个进程组的组id的绝对值，回收指定进程组中的子进程
+    - options：设置阻塞或者非阻塞
+      - 0 : 阻塞
+      - WNOHANG : 非阻塞
+    - 返回值
+      - \> 0 : 返回子进程的id
+      - 0 : options=WNOHANG, 表示还有子进程活着
+      - -1 ：错误，或者没有子进程了
+
+```c
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <stdio.h>
+#include <unistd.h>
+#include <stdlib.h>
+
+int main() {
+
+    // 有一个父进程，创建5个子进程（兄弟）
+    pid_t pid;
+
+    // 创建5个子进程
+    for(int i = 0; i < 5; i++) {
+        pid = fork();
+        if(pid == 0) {
+            break;
+        }
+    }
+
+    if(pid > 0) {
+        // 父进程
+        while(1) {
+            printf("parent, pid = %d\n", getpid());
+            sleep(1);
+
+            int st;
+            // int ret = waitpid(-1, &st, 0);
+            int ret = waitpid(-1, &st, WNOHANG);
+
+            if(ret == -1) {
+                break;
+            } else if(ret == 0) {
+                // 说明还有子进程存在
+                continue;
+            } else if(ret > 0) {
+
+                if(WIFEXITED(st)) {
+                    // 是不是正常退出
+                    printf("退出的状态码：%d\n", WEXITSTATUS(st));
+                }
+                if(WIFSIGNALED(st)) {
+                    // 是不是异常终止
+                    printf("被哪个信号干掉了：%d\n", WTERMSIG(st));
+                }
+
+                printf("child die, pid = %d\n", ret);
+            }
+           
+        }
+
+    } else if (pid == 0){
+        // 子进程
+         while(1) {
+            printf("child, pid = %d\n",getpid());    
+            sleep(1);       
+         }
+        exit(0);
+    }
+
+    return 0; 
+}
+```
+
+![image-20211002154934131](02Linux多进程开发/image-20211002154934131.png)
 
