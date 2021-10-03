@@ -891,6 +891,8 @@ int main() {
 
 # 进程间通信
 
+## 说明
+
 本部分笔记及源码出自`slide/02Linux多进程开发/06 进程间通信`
 
 ## 进程间通讯概念
@@ -935,14 +937,12 @@ int main() {
 
 ### 匿名管道
 
-#### 概念
+#### 概念及使用
 
 - `管道`也叫`无名（匿名）管道`，它是是 UNIX 系统 IPC（进程间通信）的最古老形式，所有的 UNIX 系统都支持这种通信机制
 - 统计一个目录中文件的数目命令：`ls | wc –l`，为了执行该命令，shell 创建了两个进程来分别执行 ls 和 wc
 
 ![image-20211002170052657](02Linux多进程开发/image-20211002170052657.png)
-
-#### 使用
 
 - 查看帮助：`man 2 pipe`
 
@@ -1072,7 +1072,7 @@ int main() {
 
 - 思路
 
-  - 子进程： ps aux, 子进程结束后，将数据发送给父进程
+  - 子进程： 实现`ps aux`, 子进程结束后，将数据发送给父进程
   - 父进程：获取到数据并打印
   - `pipe()->fork()->execlp()<在此之前，输出为文件描述符重定向>->打印`
 
@@ -1148,4 +1148,398 @@ int main() {
   ```
 
 - ==未解决：./ipc | wc - c 比 ps aux | wc -c 统计的进程数不同==
+
+#### 设置管道非阻塞
+
+```c
+int flags = fcntl(fd[0], F_GETFL);  // 获取原来的flag
+flags |= O_NONBLOCK;            // 修改flag的值
+fcntl(fd[0], F_SETFL, flags);   // 设置新的flag
+```
+
+#### 读写特点总结
+
+- 读管道
+  - 管道中有数据，read返回实际读到的字节数
+  - 管道中无数据
+    - 写端被全部关闭，read返回0（相当于读到文件的末尾）
+    - 写端没有完全关闭，read阻塞等待
+- 写管道
+  - 管道读端全部被关闭，进程异常终止（进程收到`SIGPIPE`信号）
+  - 管道读端没有全部关闭：
+    - 管道已满，write阻塞
+    - 管道没有满，write将数据写入，并返回实际写入的字节数
+
+### 有名管道
+
+#### 概念及使用
+
+- 匿名管道，由于没有名字，只能用于亲缘关系的进程间通信。为了克服这个缺点，提出了`有名管道（FIFO）`，也叫`命名管道`、`FIFO文件`
+- `有名管道（FIFO）`不同于匿名管道之处在于它**提供了一个路径名与之关联**，以 **FIFO 的文件形式存在于文件系统中**，并且其打开方式与打开一个普通文件是一样的，这样即使与 `FIFO` 的创建进程不存在亲缘关系的进程，只要可以访问该路径，就能够彼此通过 `FIFO` 相互通信，因此，通过 `FIFO` 不相关的进程也能交换数据
+- 一旦打开了 `FIFO`，就能在它上面使用与操作匿名管道和其他文件的系统调用一样的I/O系统调用了（如`read()`、`write()`和`close()`）。与管道一样，`FIFO` 也有一个写入端和读取端，并且从管道中读取数据的顺序与写入的顺序是一样的。FIFO 的名称也由此而来：先入先出
+- `有名管道（FIFO)`和`匿名管道（pipe）`有一些特点是相同的，不一样的地方在于
+  - `FIFO` 在文件系统中作为一个特殊文件存在，但 `FIFO` 中的**内容却存放在内存中**
+  - 当使用 `FIFO` 的进程退出后，`FIFO` 文件将继续保存在文件系统中以便以后使用
+  - `FIFO` 有名字，不相关的进程可以通过打开有名管道进行通信
+
+- 可使用`man fifo`查看帮助
+
+#### 创建有名管道
+
+- shell命令创建：`mkfifo 文件名`，可通过`man 1 mkfifo`查看帮助
+
+  ![image-20211003160648019](02Linux多进程开发/image-20211003160648019.png)
+
+- 函数创建：`int mkfifo(const char *pathname, mode_t mode);`，可通过`man 3 mkfifo`查看帮助
+
+  ```c
+  #include <sys/types.h>
+  #include <sys/stat.h>
+  #include <stdio.h>
+  #include <unistd.h>
+  #include <stdlib.h>
+  
+  int main()
+  {
+      // 判断文件是否存在
+      int ret = access("test", F_OK);
+      // 不存在则创建
+      if (ret == -1) {
+          printf("管道不存在，创建管道...\n");
+          ret = mkfifo("test", 0664);
+          if (ret == -1) {
+              perror("mkfifo");
+              exit(0);
+          }
+      }
+      
+      return 0;
+  }
+  ```
+
+  ![image-20211003161504190](02Linux多进程开发/image-20211003161504190.png)
+
+#### 实例：两进程通过有名管道通信（单一发送）
+
+- 写端
+
+  ```c
+  #include <stdio.h>
+  #include <sys/types.h>
+  #include <sys/stat.h>
+  #include <stdlib.h>
+  #include <unistd.h>
+  #include <fcntl.h>
+  #include <string.h>
+  
+  // 向管道中写数据
+  int main() 
+  {
+      // 1.判断文件是否存在
+      int ret = access("test", F_OK);
+      if(ret == -1) {
+          printf("管道不存在，创建管道\n");
+          
+          // 2.创建管道文件
+          ret = mkfifo("test", 0664);
+  
+          if(ret == -1) {
+              perror("mkfifo");
+              exit(0);
+          }       
+  
+      }
+  
+      // 3.以只写的方式打开管道
+      int fd = open("test", O_WRONLY);
+      if(fd == -1) {
+          perror("open");
+          exit(0);
+      }
+  
+      // 写数据
+      for(int i = 0; i < 100; i++) {
+          char buf[1024];
+          sprintf(buf, "hello, %d\n", i);
+          printf("write data : %s\n", buf);
+          write(fd, buf, strlen(buf));
+          sleep(1);
+      }
+  
+      close(fd);
+  
+      return 0;
+  }
+  ```
+
+- 读端
+
+  ```c
+  #include <stdio.h>
+  #include <sys/types.h>
+  #include <sys/stat.h>
+  #include <stdlib.h>
+  #include <unistd.h>
+  #include <fcntl.h>
+  
+  // 从管道中读取数据
+  int main() 
+  {
+      // 1.打开管道文件
+      int fd = open("test", O_RDONLY);
+      if(fd == -1) {
+          perror("open");
+          exit(0);
+      }
+  
+      // 读数据
+      while(1) {
+          char buf[1024] = {0};
+          // 这里不能写strlen(buf) 因为这里的含义是每次按固定长度读取，最开始strlen(buf)=0
+          int len = read(fd, buf, sizeof(buf));
+          if(len == 0) {
+              printf("写端断开连接了...\n");
+              break;
+          }
+          printf("recv buf : %s\n", buf);
+      }
+  
+      close(fd);
+  
+      return 0;
+  }
+  ```
+
+- 运行
+
+  - 当写端开始写数据，但读端没有启动时，写端阻塞
+
+    ![image-20211003164458310](02Linux多进程开发/image-20211003164458310.png)
+
+  - 当读端开始读数据，但写端没有启动时，读端阻塞
+
+    ![image-20211003164517651](02Linux多进程开发/image-20211003164517651.png)
+
+  - 两端都启动时，正常输出（无关哪个写启动）
+
+    ![image-20211003164554381](02Linux多进程开发/image-20211003164554381.png)
+
+    - 先关闭读端
+
+      ![image-20211003164654992](02Linux多进程开发/image-20211003164654992.png)
+
+    - 先关闭写端![image-20211003164634420](02Linux多进程开发/image-20211003164634420.png)
+
+#### 实例：简易版聊天功能（连续发送）
+
+- 功能：两个进程相互发送数据及接收数据，能够连续发送及接收
+
+- 思路
+
+  - 由于两个进程并没有亲缘关系，所以只能使用有名管道实现
+  - 需要两个管道
+    - 一个管道用于进程A的写与进程B的读
+    - 一个管道用于进程B的写与进程A的读
+  - 需要父子进程，实现连续发送及接收
+    - 父进程负责写入数据到管道
+    - 子进程负责从管道读取数据
+
+- 流程（不包含父子进程，即下图所示流程不能实现连续发送功能）
+
+  ![image-20211003171227426](02Linux多进程开发/image-20211003171227426.png)
+
+- 进程A
+
+  ```c
+  /*
+  chatA
+  1. 读、写数据分开，用两个管道
+      1. fifo1用于进程A写及进程B读
+      2. fifo2用于进程B写及进程A读
+  2. 连续发送及接收信息，使用两个进程
+      1. 父进程用于写数据
+      2. 子进程用于读数据
+  */
+  #include <stdio.h>
+  #include <unistd.h>
+  #include <sys/types.h>
+  #include <sys/stat.h>
+  #include <stdlib.h>
+  #include <unistd.h>
+  #include <fcntl.h>
+  #include <string.h>
+  
+  int main()
+  {
+      // 判断写管道是否存在，不存在则创建
+      int ret = access("fifo1", F_OK);
+      if (ret == -1) {
+          printf("fifo1不存在，创建...\n");
+          ret = mkfifo("fifo1", 0664);
+          if (ret == -1) {
+              perror("mkfifo");
+              exit(-1);
+          }
+      } 
+  
+      // 判断读管道是否存在，不存在则创建
+      ret = access("fifo2", F_OK);
+      if (ret == -1) {
+          printf("fifo2不存在，创建...\n");
+          ret = mkfifo("fifo2", 0664);
+          if (ret == -1) {
+              perror("mkfifo");
+              exit(-1);
+          }
+      } 
+      // 创建进程
+      pid_t pid = fork();
+      char buf[1024];
+      if (pid > 0) {
+          // 父进程
+          // 打开写管道
+          // 打开一次，否则系统可能会崩
+          int fdw = open("fifo1", O_WRONLY);
+          while (1) {
+              // 从键盘读取输入
+              printf("[chatA]please input: \n");
+              fgets(buf, sizeof(buf), stdin);
+              write(fdw, buf, strlen(buf));
+              // 清空数组
+              memset(buf, 0, sizeof(buf));
+          }
+          close(fdw);
+      } else if (pid == 0) {
+          // 子进程
+          // 打开读管道
+          // 打开一次，否则系统可能会崩
+          int fdr = open("fifo2", O_RDONLY);
+          while (1) {
+              char buf[1024];
+              int len = read(fdr, buf, sizeof(buf));
+              if(len == 0) {
+                  printf("[chatA]写端断开连接了...\n");
+                  break;
+              }
+              printf("[chatA]recv : %s", buf);
+              // 清空数组
+              memset(buf, 0, sizeof(buf));
+          }
+          close(fdr);
+      } else {
+          perror("fork");
+          exit(-2);
+      }
+  
+      return 0;
+  }
+  ```
+
+- 进程B
+
+  ```c
+  /*
+  chatB
+  1. 读、写数据分开，用两个管道
+      1. fifo1用于进程A写及进程B读
+      2. fifo2用于进程B写及进程A读
+  2. 连续发送及接收信息，使用两个进程
+      1. 父进程用于写数据
+      2. 子进程用于读数据
+  */
+  #include <stdio.h>
+  #include <unistd.h>
+  #include <sys/types.h>
+  #include <sys/stat.h>
+  #include <stdlib.h>
+  #include <unistd.h>
+  #include <fcntl.h>
+  #include <string.h>
+  
+  int main()
+  {
+      // 判断写管道是否存在，不存在则创建
+      int ret = access("fifo1", F_OK);
+      if (ret == -1) {
+          printf("fifo1不存在，创建...\n");
+          ret = mkfifo("fifo1", 0664);
+          if (ret == -1) {
+              perror("mkfifo");
+              exit(-1);
+          }
+      } 
+  
+      // 判断读管道是否存在，不存在则创建
+      ret = access("fifo2", F_OK);
+      if (ret == -1) {
+          printf("fifo2不存在，创建...\n");
+          ret = mkfifo("fifo2", 0664);
+          if (ret == -1) {
+              perror("mkfifo");
+              exit(-1);
+          }
+      } 
+      // 创建进程
+      pid_t pid = fork();
+      char buf[1024] = { 0 };
+      if (pid > 0) {
+          // 父进程
+          // 打开写管道
+          // 打开一次，否则系统可能会崩
+          int fdw = open("fifo2", O_WRONLY);
+          while (1) {
+              // 从键盘读取输入
+              printf("[chatB]please input: \n");
+              fgets(buf, sizeof(buf), stdin);
+              write(fdw, buf, strlen(buf));
+              // 清空数组
+              memset(buf, 0, sizeof(buf));
+          }
+          close(fdw);
+      } else if (pid == 0) {
+          // 子进程
+          // 打开读管道
+          // 打开一次，否则系统可能会崩
+          int fdr = open("fifo1", O_RDONLY);
+          while (1) {
+              char buf[1024];
+              int len = read(fdr, buf, sizeof(buf));
+              if(len == 0) {
+                  printf("[chatB]写端断开连接了...\n");
+                  break;
+              }
+              printf("[chatB]recv : %s", buf);
+              // 清空数组
+              memset(buf, 0, sizeof(buf));
+          }
+          close(fdr);
+      } else {
+          perror("fork");
+          exit(-2);
+      }
+  
+      return 0;
+  }
+  ```
+
+- 运行结果
+
+  ![image-20211003223202138](02Linux多进程开发/image-20211003223202138.png)
+
+- ==存在的问题==：
+  - 乱码
+  - 一个进程结束后，另一个还未结束，需要手动关闭
+
+#### 读写特点总结
+
+- 读管道
+  - 管道中有数据，`read`返回实际读到的字节数
+  - 管道中无数据：
+    - 管道写端被全部关闭，`read`返回0，（相当于读到文件末尾）
+    - 写端没有全部被关闭，` read`阻塞等待
+- 写管道
+  - 管道读端被全部关闭，进行异常终止（收到一个`SIGPIP`信号）
+  - 管道读端没有全部关闭：
+    - 管道已经满了，`write`会阻塞
+    - 管道没有满，`write`将数据写入，并返回实际写入的字节数
 
