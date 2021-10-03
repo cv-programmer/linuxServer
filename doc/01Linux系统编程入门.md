@@ -1,14 +1,12 @@
-[TOC]
-
 # 准备工作
 
 ## 系统配置
 
 1. 在虚拟机中安装Linux系统，本项目采用`VMware Workstation 16.1.2`和`Ubuntu 18.04`，本机系统为`Win 10`
 
-2. 更新`Ubuntu 18.10`源并安装`open-vm-tools`
+2. 更新`Ubuntu 18.04`源并安装`open-vm-tools`
 
-   1. 进入`/etc/apt/sources.list` 修改为国内镜像源（速度快），全部删除，替换为下述内容
+   1. 进入`/etc/apt/sources.list` 修改为国内镜像源（速度快），全部删除，替换为下述内容，如果更新报错，将`https`换成`http`
 
       ```shell
       # 默认注释了源码镜像以提高 apt update 速度，如有需要可自行取消注释
@@ -41,7 +39,7 @@
 
    5. 桌面环境还需要安装`open-vm-tools-desktop`以支持双向拖放文件：`sudo apt install open-vm-tools-desktop`
 
-   6. 重启（使用VMware自带重启，使用`reboot`重启可能失败）后成功进行拖拽复制
+   6. 重启（使用`VMware`自带重启，使用`reboot`重启可能失败）后成功进行拖拽复制
 
    注：[参考链接](https://blog.csdn.net/hhdhz/article/details/87922794)
 
@@ -100,7 +98,7 @@
 
 ![image-20210831135954037](01Linux系统编程入门/image-20210831135954037.png)
 
-- -D实例
+- `-D`实例
 
   - 源程序
 
@@ -141,14 +139,14 @@
 ### gcc与g++区别
 
 - `gcc` 和 `g++` 都是`GNU(组织)`的一个编译器
-- **误区一：`gcc` 只能编译 c 代码，g++ 只能编译 c++ 代码**
+- **误区一**：`gcc` 只能编译 c 代码，g++ 只能编译 c++ 代码
   - 后缀为` .c` 的，`gcc` 把它当作是 C 程序，而 `g++` 当作是 `c++` 程序
   - 后缀为 `.cpp` 的，两者都会认为是 `C++` 程序，`C++` 的语法规则更加严谨一些
   - 编译阶段，`g++` 会调用 `gcc`，对于 `C++` 代码，两者是等价的，但是因为 `gcc` 命令不能自动和 `C++` 程序使用的库联接，所以通常用 `g++` 来完成链接，为了统一起见，干脆编译/链接统统用 `g++` 了，这就给人一种错觉，好像 `cpp` 程序只能用 `g++` 似的
-- **误区二：`gcc` 不会定义 `__cplusplus` 宏，而 `g++` 会 **
+- **误区二**：`gcc` 不会定义 `__cplusplus` 宏，而 `g++` 会 
   - 实际上，这个宏只是标志着编译器将会把代码按 C 还是 C++ 语法来解释
-  - 如上所述，如果后缀为 .c，并且采用 `gcc` 编译器，则该宏就是未定义的，否则，就是已定义
-- **误区三：编译只能用 gcc，链接只能用 g++**
+  - 如上所述，如果后缀为` .c`，并且采用 `gcc` 编译器，则该宏就是未定义的，否则，就是已定义
+- **误区三**：编译只能用 `gcc`，链接只能用 `g++`
   - 严格来说，这句话不算错误，但是它混淆了概念，应该这样说：编译可以用 `gcc/g++`，而链接可以用 `g++` 或者 `gcc -lstdc++`
   - `gcc` 命令不能自动和C++程序使用的库联接，所以通常使用 `g++` 来完成链接。但在编译阶段，`g++` 会自动调用 `gcc`，二者等价
 
@@ -213,15 +211,15 @@
 
 - 编译运行：`gcc main.c -o app -I ./include -l calc -L ./lib`
 
-  - `-I ./include`指定头文件目录，如果不指定，出现以下错误
+  - `-I ./include`：指定头文件目录，如果不指定，出现以下错误
 
     ![image-20210831170715090](01Linux系统编程入门/image-20210831170715090.png)
 
-  - `-l calc`指定静态库名称，如果不指定，出现以下错误
+  - `-l calc`：指定静态库名称，如果不指定，出现以下错误
 
     ![image-20210831170816127](01Linux系统编程入门/image-20210831170816127.png)
 
-  - `-L ./lib`指定静态库位置，如果不指定，出现以下错误
+  - `-L ./lib`：指定静态库位置，如果不指定，出现以下错误
 
     ![image-20210831170844743](01Linux系统编程入门/image-20210831170844743.png)
 
@@ -331,7 +329,7 @@
 - 如何定位共享库文件呢？
 
   - 当系统加载可执行代码时候，能够知道其所依赖的库的名字，但是还需要知道**绝对路径**。此时就需要系统的动态载入器来获取该绝对路径
-  - 对于`elf格式`的可执行程序，是由`ld-linux.so`来完成的，它先后搜索elf文件的 `DT_RPATH`段 => `环境变量LD_LIBRARY_PATH` => `/etc/ld.so.cache文件列表` => `/lib/`，`usr/lib`目录找到库文件后将其载入内存
+  - 对于`elf格式`的可执行程序，是由`ld-linux.so`来完成的，它先后搜索`elf文件`的 `DT_RPATH`段 => `环境变量LD_LIBRARY_PATH` => `/etc/ld.so.cache文件列表` => `/lib/`，`usr/lib`目录找到库文件后将其载入内存
 
 ### 静态库和动态库的对比
 
@@ -363,9 +361,10 @@
 
 ### 概念及安装
 
-- 一个工程中的源文件不计其数，其按类型、功能、模块分别放在若干个目录中，Makefile 文件定义了一系列的规则来指定哪些文件需要先编译，哪些文件需要后编译，哪些文件需要重新编译，甚至于进行更复杂的功能操作，因为 Makefile 文件就像一个 Shell 脚本一样，也可以执行操作系统的命令
-- Makefile 带来的好处就是“自动化编译” ，一旦写好，只需要一个 make 命令，整个工程完全自动编译，极大的提高了软件开发的效率。make 是一个命令工具，是一个解释 Makefile 文件中指令的命令工具，一般来说，大多数的 IDE 都有这个命令，比如 Delphi 的 `make`，Visual C++ 的 `nmake`，Linux 下 GNU 的 `make`
-- 安装：`sudo apt install make`
+- 一个工程中的源文件不计其数，其按类型、功能、模块分别放在若干个目录中，`Makefile` 文件定义了一系列的规则来指定哪些文件需要先编译，哪些文件需要后编译，哪些文件需要重新编译，甚至于进行更复杂的功能操作，因为 `Makefile` 文件就像一个 `Shell` 脚本一样，也可以执行操作系统的命令
+- `Makefile` 带来的好处就是“自动化编译” ，一旦写好，只需要一个 `make` 命令，整个工程完全自动编译，极大的提高了软件开发的效率。
+- `make` 是一个命令工具，是一个解释 `Makefile` 文件中指令的命令工具，一般来说，大多数的 `IDE` 都有这个命令，比如 Delphi 的 `make`，Visual C++ 的 `nmake`，Linux 下 GNU 的 `make`
+- 安装：`sudo apt install make`，安装时会安装`man 手册`
 
 ### Makefile 文件命名和规则
 
@@ -373,15 +372,15 @@
 
 - `Makefile` 规则
 
-  - 一个 Makefile 文件中可以有一个或者多个规则
+  - 一个 `Makefile` 文件中可以有一个或者多个规则
 
     ![image-20210902093603940](01Linux系统编程入门/image-20210902093603940.png)
 
-    - 目标：最终要生成的文件（伪目标除外）
-    - 依赖：生成目标所需要的文件或是目标
-    - 命令：通过执行命令对依赖操作生成目标（命令前必须 Tab 缩进）
+    - **目标**：最终要生成的文件（伪目标除外）
+    - **依赖**：生成目标所需要的文件或是目标
+    - **命令**：通过执行命令对依赖操作生成目标（命令前必须 Tab 缩进）
 
-  - Makefile 中的其它规则一般都是为第一条规则服务的。
+  - `Makefile` 中的其它规则一般都是为第一条规则服务的。
 
 ### Makefile编写方式
 
@@ -792,24 +791,15 @@ int test(int a) {
 
 #### open & close
 
-- `int open(const char *pathname, int flags);`
+- `int open(const char *pathname, int flags);`，使用`man 2 open`查看帮助
+
+  - 参数
+    - `pathname`：要打开的文件路径
+    - `flags`：对文件的操作权限设置还有其他的设置(`O_RDONLY,`  `O_WRONLY,`  `O_RDWR`  这三个设置是互斥的，代表只读，只写，可读可写)
+  - 返回值：返回一个新的文件描述符，如果调用失败，返回-1，并设置`errno`，`errno`属于Linux系统函数库里面的一个全局变量，记录的是最近的错误号
 
   ```c
   /*
-      #include <sys/types.h>
-      #include <sys/stat.h>
-      #include <fcntl.h>
-  
-      // 打开一个已经存在的文件
-      int open(const char *pathname, int flags);
-          参数：
-              - pathname：要打开的文件路径
-              - flags：对文件的操作权限设置还有其他的设置
-                O_RDONLY,  O_WRONLY,  O_RDWR  这三个设置是互斥的
-          返回值：返回一个新的文件描述符，如果调用失败，返回-1
-  
-      errno：属于Linux系统函数库，库里面的一个全局变量，记录的是最近的错误号。
-  
       #include <stdio.h>
       void perror(const char *s);作用：打印errno对应的错误描述
           参数s：用户描述，比如hello, 最终输出的内容是  hello:xxx(实际的错误描述)
@@ -841,22 +831,18 @@ int test(int a) {
   }
   ```
 
-- `int open(const char *pathname, int flags, mode_t mode);`
+- `int open(const char *pathname, int flags, mode_t mode);`，使用`man 2 open`查看帮助
+
+  - 参数
+    - `pathname`：要创建的文件的路径
+    - `flags`：对文件的操作权限和其他的设置
+      - 必选项：`O_RDONLY`,  `O_WRONLY`, `O_RDWR`  这三个之间是互斥的
+      - 可选项：`O_CREAT` 文件不存在，创建新文件
+      - `flags`参数是一个int类型的数据，占4个字节，32位，每一位就是一个标志位，所以用 `|` 可以保证能够实现多个操作
+    - `mode`：八进制的数，表示创建出的新的文件的操作权限，比如：0775
 
   ```c
   /*
-      #include <sys/types.h>
-      #include <sys/stat.h>
-      #include <fcntl.h>
-  
-      int open(const char *pathname, int flags, mode_t mode);
-          参数：
-              - pathname：要创建的文件的路径
-              - flags：对文件的操作权限和其他的设置
-                  - 必选项：O_RDONLY,  O_WRONLY, O_RDWR  这三个之间是互斥的
-                  - 可选项：O_CREAT 文件不存在，创建新文件
-                  - flags参数是一个int类型的数据，占4个字节，32位，每一位就是一个标志位，所以用 | 可以保证能够实现多个操作
-              - mode：八进制的数，表示创建出的新的文件的操作权限，比如：0775
               最终的权限是：mode & ~umask
               0777   ->   111111111
           &   0775   ->   111111101
@@ -891,33 +877,26 @@ int test(int a) {
 
 #### read & write
 
-- `ssize_t read(int fd, void *buf, size_t count);`
-- `ssize_t write(int fd, const void *buf, size_t count);`
+- `ssize_t read(int fd, void *buf, size_t count);`，使用`man 2 read`查看帮助
+  - 参数
+    - `fd`：文件描述符，open得到的，通过这个文件描述符操作某个文件
+    - `buf`：需要读取数据存放的地方，数组的地址（传出参数）
+    - `count`：指定的数组的大小
+  - 返回值
+    - 成功
+      - `> 0`: 返回实际的读取到的字节数
+      - `= 0`：文件已经读取完了
+    - 失败：-1
+- `ssize_t write(int fd, const void *buf, size_t count);`，使用`man 2 write`查看帮助
+  - 参数
+    - `fd`：文件描述符，open得到的，通过这个文件描述符操作某个文件
+    - `buf`：要往磁盘写入的数据
+    - `count`：要写的数据的实际的大小
+  - 返回值
+    - 成功：实际写入的字节数
+    - 失败：返回-1，并设置`errno`
 
 ```c
-/*  
-    #include <unistd.h>
-    ssize_t read(int fd, void *buf, size_t count);
-        参数：
-            - fd：文件描述符，open得到的，通过这个文件描述符操作某个文件
-            - buf：需要读取数据存放的地方，数组的地址（传出参数）
-            - count：指定的数组的大小
-        返回值：
-            - 成功：
-                >0: 返回实际的读取到的字节数
-                =0：文件已经读取完了
-            - 失败：-1 ，并且设置errno
-
-    #include <unistd.h>
-    ssize_t write(int fd, const void *buf, size_t count);
-        参数：
-            - fd：文件描述符，open得到的，通过这个文件描述符操作某个文件
-            - buf：要往磁盘写入的数据，数据
-            - count：要写的数据的实际的大小
-        返回值：
-            成功：实际写入的字节数
-            失败：返回-1，并设置errno
-*/
 #include <unistd.h>
 #include <stdio.h>
 #include <sys/types.h>
@@ -958,7 +937,7 @@ int main()
 
 #### lseek
 
-- `off_t lseek(int fd, off_t offset, int whence);`
+- `off_t lseek(int fd, off_t offset, int whence);`，使用`man 2 lseek`查看帮助
 
 ```c
 /*  
@@ -1041,9 +1020,9 @@ int main()
 
 #### stat & lstat(获取文件信息及软链接信息)
 
-- `int stat(const char *pathname, struct stat *statbuf);`
+- `int stat(const char *pathname, struct stat *statbuf);`，使用`man 2 stat`查看帮助
 
-- `int lstat(const char *pathname, struct stat *statbuf);`
+- `int lstat(const char *pathname, struct stat *statbuf);`，使用`man 2 lstat`查看帮助
 
 - Linux命令：`stat`
 
