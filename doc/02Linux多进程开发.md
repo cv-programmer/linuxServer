@@ -1880,7 +1880,7 @@ fcntl(fd[0], F_SETFL, flags);   // 设置新的flag
 
 ### core文件生成及调试
 
-- 当进程异常终止时，会生成`core`文件，可以通过`gdb`调试查看错误，调试以下程序
+- 当进程异常终止时，会生成`core`文件（需要进行相应设置），可以通过`gdb`调试查看错误，调试以下程序
 
 - code
 
@@ -2142,6 +2142,98 @@ int main() {
 
   ![image-20211006100149339](02Linux多进程开发/image-20211006100149339.png)
 
+### sigaction
+
+- `int sigaction(int signum, const struct sigaction *act,struct sigaction *oldact);`
+
+  - 使用`man 2 sigaction`查看帮助
+  - 功能：检查或者改变信号的处理，即信号捕捉
+  - 参数
+    - `signum` : 需要捕捉的信号的编号或者宏值（信号的名称）
+    - `act` ：捕捉到信号之后的处理动作
+    - `oldact` : 上一次对信号捕捉相关的设置，一般不使用，设置为NULL
+  - 返回值：成功返回0， 失败返回-1
+
+- `struct sigaction`
+
+  ```c
+  struct sigaction {
+      // 函数指针，指向的函数就是信号捕捉到之后的处理函数
+      void     (*sa_handler)(int);
+      // 不常用
+      void     (*sa_sigaction)(int, siginfo_t *, void *);
+      // 临时阻塞信号集，在信号捕捉函数执行过程中，临时阻塞某些信号。
+      sigset_t   sa_mask;
+      // 使用哪一个信号处理对捕捉到的信号进行处理
+      // 这个值可以是0，表示使用sa_handler,也可以是SA_SIGINFO表示使用sa_sigaction
+      int        sa_flags;
+      // 被废弃掉了
+      void     (*sa_restorer)(void);
+  };
+  ```
+
+```c
+#include <sys/time.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <signal.h>
+
+void myalarm(int num) {
+    printf("捕捉到了信号的编号是：%d\n", num);
+    printf("xxxxxxx\n");
+}
+
+// 过3秒以后，每隔2秒钟定时一次
+int main() {
+
+    struct sigaction act;
+    act.sa_flags = 0;
+    act.sa_handler = myalarm;
+    sigemptyset(&act.sa_mask);  // 清空临时阻塞信号集
+   
+    // 注册信号捕捉
+    sigaction(SIGALRM, &act, NULL);
+
+    struct itimerval new_value;
+
+    // 设置间隔的时间
+    new_value.it_interval.tv_sec = 2;
+    new_value.it_interval.tv_usec = 0;
+
+    // 设置延迟的时间,3秒之后开始第一次定时
+    new_value.it_value.tv_sec = 3;
+    new_value.it_value.tv_usec = 0;
+
+    int ret = setitimer(ITIMER_REAL, &new_value, NULL); // 非阻塞的
+    printf("定时器开始了...\n");
+
+    if(ret == -1) {
+        perror("setitimer");
+        exit(0);
+    }
+
+    // getchar();
+    while(1);
+
+    return 0;
+}
+```
+
+![image-20211006234920154](02Linux多进程开发/image-20211006234920154.png)
+
+### signal和sigaction区别
+
+- 参数区别
+- 版本区别，`signal`在不同版本Linux中，行为不一致，所以推荐使用`sigaction`（`ubutun`下两者一致）
+
+### 内核实现信号捕捉的过程
+
+![image-20211006235431837](02Linux多进程开发/image-20211006235431837.png)
+
+### ==未解决==
+
+- `signal`中可以使用一个`getchar()`阻塞信号，而`sigaction`中调用几次回调函数，就要使用多少个`getchar()`
+
 ## 信号集
 
 ### 基本概念
@@ -2149,7 +2241,7 @@ int main() {
 - 使用`man 3 sigset`查看帮助
 
 - 许多信号相关的系统调用都需要能表示一组不同的信号，多个信号可使用一个称之为信号集的数据结构来表示，其系统数据类型为 `sigset_t`
-- 在 PCB 中有两个非常重要的信号集。一个称之为 `阻塞信号集` ，另一个称之为`未决信号集”`。这两个信号集都是**内核使用位图机制来实现**的。但操作系统不允许我们直接对这两个信号集进行位操作。而需自定义另外一个集合，借助信号集操作函数来对 PCB 中的这两个信号集进行修改
+- 在 PCB 中有两个非常重要的信号集。一个称之为 `阻塞信号集` ，另一个称之为`未决信号集`。这两个信号集都是**内核使用位图机制来实现**的。但操作系统不允许我们直接对这两个信号集进行位操作。而需自定义另外一个集合，借助信号集操作函数来对 PCB 中的这两个信号集进行修改
 - 信号的 `未决` 是一种状态，指的是**从信号的产生到信号被处理前的这一段时间**
 - 信号的 `阻塞` 是一个开关动作，指的是**阻止信号被处理，但不是阻止信号产生**。信号的阻塞就是让系统暂时保留信号留待以后发送。由于另外有办法让系统忽略信号，所以一般情况下信号的阻塞只是暂时的，只是为了防止信号打断敏感的操作
 
@@ -2168,7 +2260,7 @@ int main() {
    - 如果没有阻塞，这个信号就被处理
    - 如果阻塞了，这个信号就继续处于未决状态，直到阻塞解除，这个信号就被处理
 
-### 操作自定义信号集函数
+### 操作自定义信号集函数(sigemptyset等)
 
 - 使用`man 3 sigemptyset`查看帮助
 - `int sigemptyset(sigset_t *set);`
@@ -2258,7 +2350,7 @@ int main()
 
 ![image-20211006123209575](02Linux多进程开发/image-20211006123209575.png)
 
-### 操作内核信号集函数
+### 操作内核信号集函数(sigprocmask & sigpending)
 
 - `int sigprocmask(int how, const sigset_t *set, sigset_t *oldset);`
   - 使用`man 2 sigprocmask`查看帮助
@@ -2328,6 +2420,100 @@ int main()
 ```
 
 ![image-20211006131223858](02Linux多进程开发/image-20211006131223858.png)
+
+## SIGCHLD信号
+
+### 基本介绍
+
+- 作用：解决**僵尸进程问题**，能够在不阻塞父进程的情况下，回收子进程的资源
+
+### 使用
+
+```c
+#include <stdio.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#include <signal.h>
+#include <sys/wait.h>
+
+void myalarm(int num) {
+    printf("捕捉到了信号的编号是：%d\n", num);
+    // 回收子进程PCB的资源
+    // 因为可能多个子进程同时死了，所以使用while循环
+    // 不使用wait是因为会造成阻塞，父进程不能继续
+    // 使用waitpid可以设置非阻塞
+    while (1) {
+        int ret = waitpid(-1, NULL, WNOHANG);
+        if(ret > 0) {
+            // 回收一个子进程
+           printf("child die , pid = %d\n", ret);
+       } else if(ret == 0) {
+           // 说明还有子进程活着
+           break;
+       } else if(ret == -1) {
+           // 没有子进程
+           break;
+       }
+    }
+}
+
+int main()
+{
+    // 提前设置好阻塞信号集，阻塞SIGCHLD，因为有可能子进程很快结束，父进程还没有注册完信号捕捉
+    sigset_t set;
+    sigemptyset(&set);
+    sigaddset(&set, SIGCHLD);
+    sigprocmask(SIG_BLOCK, &set, NULL);
+
+    pid_t pid;
+    // 创建一些子进程
+    for (int i = 0; i < 20; i++) {
+        pid = fork();
+        // 如果是子进程，不在作为父进程继续创建子进程
+        if (pid == 0) {
+            break;
+        }
+    }
+    // 子进程先结束，父进程循环=>产生僵尸进程
+    if (pid > 0) {
+        // 父进程
+        // 使用sigaction捕捉子进程死亡时发送的SIGCHLD信号
+        struct sigaction act;
+        act.sa_flags = 0;
+        act.sa_handler = myalarm;
+        sigemptyset(&act.sa_mask);
+        sigaction(SIGCHLD, &act, NULL);
+
+        // 注册完信号捕捉以后，解除阻塞
+        sigprocmask(SIG_UNBLOCK, &set, NULL);
+        
+        while (1) {
+            printf("parent process : %d\n", getpid());
+            sleep(2);
+        }
+    } else {
+        // 子进程
+        printf("child process : %d\n", getpid());
+    }
+
+    return 0;
+}
+```
+
+### 注意
+
+- 可能会出现段错误（不一定能复现）
+
+  - 原因：在捕获信号注册前，子进程已经执行完
+
+    > 如果从开始注册信号到注册成功这段时间里，有n个SIGCHID信号产生的话，那么第一个产生的SIGCHID会抢先将未决位置为1，余下的n-1个SIGCHID被丢弃，然后当阻塞解除之后，信号处理函数发现这时候对应信号的未决位为1，继而执行函数处理该信号，处理函数中的while循环顺带将其他n-1子进程也一网打尽了，在这期间未决位的状态只经历了两次变化，即0->1->0
+
+  ![image-20211010104606565](02Linux多进程开发/image-20211010104606565.png)
+
+- 捕捉一次可能会回收多个子进程
+
+  ![image-20211010105106921](02Linux多进程开发/image-20211010105106921.png)
 
 # 实用技巧
 
