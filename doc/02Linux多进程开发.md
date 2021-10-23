@@ -2587,17 +2587,6 @@ int main()
     - `proj_id`：int类型的值，但是系统调用只会使用其中的1个字节，范围 ： 0-255  一般指定一个字符 `'a'`
   - 返回值：`shmget`中用到的`key`
 
-## 实例：进程间通信
-
-- write
-
-  ```c
-  ```
-
-  
-
-- read
-
 ## 共享内存操作命令
 
 ### ipcs 
@@ -2615,6 +2604,138 @@ int main()
 - `ipcrm -q msqid`：移除用`msqid`标识的**消息队列**
 - `ipcrm -S semkey`：移除用`semkey`创建的**信号**
 - `ipcrm -s semid`：移除用`semid`标识的**信号**
+
+## 实例：进程间通信（注意）
+
+### 写端
+
+```c
+#include <stdio.h>
+#include <sys/ipc.h>
+#include <sys/shm.h>
+#include <string.h>
+
+int main()
+{
+    // 1. 创新新共享内存
+    // key不能随意指定，比如用key=100时会产生段错误
+    int shmId = shmget(100, 1024, IPC_CREAT | IPC_EXCL | 0664);
+    // 2. 将进程与共享内存关联
+    void* ptr = shmat(shmId, NULL, 0);
+    // 3. 往共享内存中写数据
+    // 操作内存只能使用memcpy，使用strcpy会产生段错误
+    // strcpy((char*)addr, "hello, world");
+    char* str = "helloworld";
+    printf("send : %s\n", str);
+    // 包含结束符'\0'
+    memcpy(ptr, str, strlen(str) + 1);
+    // 为了程序不被直接停掉，如果停掉，那么共享内存不复存在
+    printf("按任意键继续\n");
+    getchar();
+    // 4. 分离内存段
+    shmdt(ptr);
+    // 5. 删除共享内存段（标记删除）
+    shmctl(shmId, IPC_RMID, NULL);
+    return 0;
+}
+```
+
+### 读端
+
+```c
+#include <stdio.h>
+#include <sys/ipc.h>
+#include <sys/shm.h>
+#include <string.h>
+
+int main()
+{
+    // 1. 判断并获取共享内存
+    // 注意IPC_EXCL只能在创建共享内存时使用
+    int shmId = shmget(100, 1024, IPC_CREAT); 
+    // int shmId = shmget(100, 1024, IPC_CREAT | IPC_EXCL | 0664);
+    // 2. 将进程与共享内存关联
+    void* addr = shmat(shmId, NULL, 0);
+    // 3. 从共享内存中读数据
+    // 此时字符串内存即为共享内存内容
+    printf("recv : %s\n", (char*)addr);
+    // 为了程序不被直接停掉，如果停掉，那么共享内存不复存在
+    printf("按任意键继续\n");
+    getchar();
+    // 4. 分离内存段
+    shmdt(addr);
+    // 5. 删除共享内存段（标记删除）
+    shmctl(shmId, IPC_RMID, NULL);
+    return 0;
+}
+```
+
+### 注意
+
+#### 虚拟机和实体机
+
+1. 虚拟机在启动情况下，有默认共享内存，而实体机（服务器）没有
+
+   - 虚拟机
+
+     ![image-20211023212105306](02Linux多进程开发/image-20211023212105306.png)
+
+   - 实体机
+
+     ![image-20211023212132287](02Linux多进程开发/image-20211023212132287.png)
+
+#### 执行顺序与代码（注意）
+
+1. **先执行读端，再执行写端**，且关键代码如下时，此时**读端读到空数据，写端会先输出内容然后产生段错误**
+
+   ```c
+   // write
+   int shmId = shmget(100, 1024, IPC_CREAT | IPC_EXCL | 0664);
+   // read
+   int shmId = shmget(100, 1024, IPC_CREAT | IPC_EXCL | 0664);
+   ```
+
+   ![image-20211023212353103](02Linux多进程开发/image-20211023212353103.png)
+
+2. **先执行写端，再执行读端**，且关键代码如下时，此时**写端正常写数据，读端会产生段错误**
+
+   ```c
+   // write
+   int shmId = shmget(100, 1024, IPC_CREAT | IPC_EXCL | 0664);
+   // read
+   int shmId = shmget(100, 1024, IPC_CREAT | IPC_EXCL | 0664);
+   ```
+
+   ![image-20211023212610468](02Linux多进程开发/image-20211023212610468.png)
+
+3. **先执行读端，再执行写端**，且关键代码如下时，此时**读端产生段错误，写端会先输出内容然后产生段错误且当前key=100（十六进制为64）被占用，按先写后读顺序时，需要手动回收内存，否则不能继续该块内存**，如下图所示
+
+   ```c
+   // write
+   int shmId = shmget(100, 1024, IPC_CREAT | IPC_EXCL | 0664);
+   // read
+   int shmId = shmget(100, 1024, IPC_CREAT); 
+   ```
+
+   ![image-20211023212851187](02Linux多进程开发/image-20211023212851187.png)
+
+   ![image-20211023213017484](02Linux多进程开发/image-20211023213017484.png)
+
+   ![image-20211023213335145](02Linux多进程开发/image-20211023213335145.png)
+
+4. **先执行写端，再执行读端**，且关键代码如下时，**正常执行**
+
+   ```c
+   // write
+   int shmId = shmget(100, 1024, IPC_CREAT | IPC_EXCL | 0664);
+   // read
+   int shmId = shmget(100, 1024, IPC_CREAT); 
+   ```
+
+   ![image-20211023213450784](02Linux多进程开发/image-20211023213450784.png)
+
+5. 出现的原因
+   - 当先执行读端时，此时共享内存中没有内容或者没有创建
 
 ## 总结
 
