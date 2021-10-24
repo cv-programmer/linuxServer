@@ -425,3 +425,895 @@ int main()
 ```
 
 ![image-20211024143206510](03Linux多线程开发/image-20211024143206510.png)
+
+# 线程同步
+
+## 说明
+
+本部分笔记及源码出自`slide/03Linux多线程开发/02 线程同步`
+
+## ==疑问==
+
+什么时候加锁合适？不同时机加锁可能会导致不一样的结果
+
+## 出现的原因
+
+- 假设我有100张票，有三个窗口同时在售卖，那么
+- 如果`ticket`为局部变量，那么每个窗口都是从100开始售卖=>执行`test1()`
+- 如果`ticket`为全局变量，那么不同窗口可能因为抢占资源而同时开始售卖，导致出现同时在卖同一张票（可能出现负数票）=>执行`test2()`
+
+```c
+#include <stdio.h>
+#include <pthread.h>
+
+void* selltickets1(void* arg) {
+    int tickets = 10;
+    while (tickets > 0) {
+        printf("线程%ld 正在售卖第%d张票\n", pthread_self(), tickets);
+        tickets--;
+    }
+
+    return NULL;
+}
+
+void test1() {
+    // 创建三个线程
+    pthread_t tid1;
+    pthread_t tid2;
+    pthread_t tid3;
+    pthread_create(&tid1, NULL, selltickets1, NULL);
+    pthread_create(&tid2, NULL, selltickets1, NULL);
+    pthread_create(&tid3, NULL, selltickets1, NULL);
+    // 线程连接，回收子线程的资源，阻塞
+    pthread_join(tid1, NULL);
+    pthread_join(tid2, NULL);
+    pthread_join(tid3, NULL);
+}
+
+int total_tickets = 10;
+
+void* selltickets2(void* arg) {
+    while (total_tickets > 0) {
+        printf("线程%ld 正在售卖第%d张票\n", pthread_self(), total_tickets);
+        total_tickets--;
+    }
+
+    return NULL;
+}
+
+void test2() {
+    // 创建三个线程
+    pthread_t tid1;
+    pthread_t tid2;
+    pthread_t tid3;
+    pthread_create(&tid1, NULL, selltickets2, NULL);
+    pthread_create(&tid2, NULL, selltickets2, NULL);
+    pthread_create(&tid3, NULL, selltickets2, NULL);
+    // 线程连接，回收子线程的资源，阻塞
+    pthread_join(tid1, NULL);
+    pthread_join(tid2, NULL);
+    pthread_join(tid3, NULL);
+}
+
+
+int main()
+{
+    test2();
+    pthread_exit(NULL);     // 退出main进程
+    return 0;
+}
+```
+
+- 执行`test1`
+
+  ![image-20211024145941102](03Linux多线程开发/image-20211024145941102.png)
+
+- 执行`test2`
+
+  ![image-20211024145916760](03Linux多线程开发/image-20211024145916760.png)
+
+## 线程同步概念
+
+- 线程的主要优势在于，**能够通过全局变量来共享信息**。不过，这种便捷的共享是有代价的：必须确保多个线程不会同时修改同一变量，或者某一线程不会读取正在由其他线程修改的变量
+- `临界区`是指访问某一共享资源的代码片段，并且这段代码的执行应为`原子操作`，也就是同时访问同一共享资源的其他线程不应终端该片段的执行
+- `线程同步`：即**当有一个线程在对内存进行操作时，其他线程都不可以对这个内存地址进行操作，直到该线程完成操作，其他线程才能对该内存地址进行操作，而其他线程则处于等待状态**
+
+## 互斥量/互斥锁
+
+### 基本概念
+
+- 为避免线程更新共享变量时出现问题，可以使用`互斥量（mutex 是 mutual exclusion的缩写）`来确保同时仅有一个线程可以访问某项共享资源。使用**互斥量能保证对任意共享资源的原子访问**
+
+- 互斥量有两种状态：`已锁定（locked）`和`未锁定（unlocked）`。任何时候，**至多只有一个线程可以锁定该互斥量**。试图对已经锁定的某一互斥量再次加锁，将可能阻塞线程或者报错失败，具体取决于加锁时使用的方法
+
+- 一旦线程锁定互斥量，随即成为该互斥量的所有者，**只有所有者才能给互斥量解锁**。一般情况下，对每一共享资源（可能由多个相关变量组成）会使用不同的互斥量，每一线程在访问同一资源时将采用如下协议
+
+  - 针对共享资源锁定互斥量
+  - 访问共享资源
+  - 对互斥量解锁
+
+- 如果多个线程试图执行这一块代码（一个临界区），事实上只有一个线程能够持有该互斥量（其他线程将遭到阻塞），即同时只有一个线程能够进入这段代码区域，如下
+
+  ![image-20211024153557069](03Linux多线程开发/image-20211024153557069.png)
+
+### 互斥量相关操作函数
+
+- 互斥量的类型：`pthread_mutex_t`
+- 初始化互斥量：`int pthread_mutex_init(pthread_mutex_t *restrict mutex, const pthread_mutexattr_t *restrict attr);`
+  - 参数
+    - `mutex` ： 需要初始化的互斥量变量
+    - `attr` ： 互斥量相关的属性，设置为NULL，由内核指定
+  - `restrict` : C语言的修饰符，被修饰的指针，不能由另外的一个指针进行操作
+
+- 释放互斥量的资源：`int pthread_mutex_destroy(pthread_mutex_t *mutex);`
+- 加锁：`int pthread_mutex_lock(pthread_mutex_t *mutex);`
+- 尝试加锁：`int pthread_mutex_trylock(pthread_mutex_t *mutex);`
+- 解锁：`int pthread_mutex_unlock(pthread_mutex_t *mutex);`
+
+### 实例：互斥锁实现进程同步售票
+
+```c
+#include <stdio.h>
+#include <pthread.h>
+
+// 全局变量创建互斥量，保证所有线程都能访问
+pthread_mutex_t mutex;
+
+int total_tickets = 100;
+
+void* selltickets(void* arg) {
+    while (1) {
+        // 加锁
+        pthread_mutex_lock(&mutex);
+        if (total_tickets > 0) {
+            // 访问共享变量
+            printf("线程%ld 正在售卖第%d张票\n", pthread_self(), total_tickets);
+            total_tickets--;
+        } else {
+            // 解锁
+            pthread_mutex_unlock(&mutex);
+            break;
+        }
+        // 解锁
+        pthread_mutex_unlock(&mutex);
+    }
+
+    return NULL;
+}
+
+int main()
+{
+    // 初始化互斥量
+    pthread_mutex_init(&mutex, NULL);
+
+    // 创建三个线程
+    pthread_t tid1;
+    pthread_t tid2;
+    pthread_t tid3;
+    pthread_create(&tid1, NULL, selltickets, NULL);
+    pthread_create(&tid2, NULL, selltickets, NULL);
+    pthread_create(&tid3, NULL, selltickets, NULL);
+    // 线程连接，回收子线程的资源，阻塞
+    pthread_join(tid1, NULL);
+    pthread_join(tid2, NULL);
+    pthread_join(tid3, NULL);
+    pthread_exit(NULL);     // 退出main进程
+
+    // 释放互斥量资源
+    pthread_mutex_destroy(&mutex);
+    return 0;
+}
+```
+
+![image-20211024154443063](03Linux多线程开发/image-20211024154443063.png)
+
+## 死锁
+
+### 基本概念
+
+- 一个线程需要同时访问两个或更多不同的共享资源，而每个资源又都由不同的互斥量管理。当超过一个线程加锁同一组互斥量时，就有可能发生`死锁`
+- 两个或两个以上的进程在执行过程中，因争夺共享资源而造成的一种互相等待的现象，若无外力作用，它们都将无法推进下去。此时称系统处于死锁状态或系统产生了死锁
+
+### 死锁的几种场景
+
+#### 忘记释放锁
+
+```c
+#include <stdio.h>
+#include <pthread.h>
+#include <unistd.h>
+
+// 全局变量，所有的线程都共享这一份资源。
+int tickets = 1000;
+
+// 创建一个互斥量
+pthread_mutex_t mutex;
+
+void * sellticket(void * arg) {
+
+    // 卖票
+    while(1) {
+        // 加锁
+        pthread_mutex_lock(&mutex);
+
+        if(tickets > 0) {
+            usleep(6000);
+            printf("%ld 正在卖第 %d 张门票\n", pthread_self(), tickets);
+            tickets--;
+        }else {
+            // 解锁
+            pthread_mutex_unlock(&mutex);
+            break;
+        }
+        
+    }
+
+    return NULL;
+}
+
+int main() 
+{
+    // 初始化互斥量
+    pthread_mutex_init(&mutex, NULL);
+
+    // 创建3个子线程
+    pthread_t tid1, tid2, tid3;
+    pthread_create(&tid1, NULL, sellticket, NULL);
+    pthread_create(&tid2, NULL, sellticket, NULL);
+    pthread_create(&tid3, NULL, sellticket, NULL);
+
+    // 回收子线程的资源,阻塞
+    pthread_join(tid1, NULL);
+    pthread_join(tid2, NULL);
+    pthread_join(tid3, NULL);
+
+    pthread_exit(NULL); // 退出主线程
+
+    // 释放互斥量资源
+    pthread_mutex_destroy(&mutex);
+
+    return 0;
+}
+```
+
+#### 重复加锁
+
+```c
+#include <stdio.h>
+#include <pthread.h>
+#include <unistd.h>
+
+// 全局变量，所有的线程都共享这一份资源。
+int tickets = 1000;
+
+// 创建一个互斥量
+pthread_mutex_t mutex;
+
+void * sellticket(void * arg) {
+
+    // 卖票
+    while(1) {
+
+        // 加锁
+        pthread_mutex_lock(&mutex);
+        pthread_mutex_lock(&mutex);
+
+        if(tickets > 0) {
+            usleep(6000);
+            printf("%ld 正在卖第 %d 张门票\n", pthread_self(), tickets);
+            tickets--;
+        }else {
+            // 解锁
+            pthread_mutex_unlock(&mutex);
+            break;
+        }
+
+        // 解锁
+        pthread_mutex_unlock(&mutex);
+        pthread_mutex_unlock(&mutex);
+    }
+
+    return NULL;
+}
+
+int main() {
+
+    // 初始化互斥量
+    pthread_mutex_init(&mutex, NULL);
+
+    // 创建3个子线程
+    pthread_t tid1, tid2, tid3;
+    pthread_create(&tid1, NULL, sellticket, NULL);
+    pthread_create(&tid2, NULL, sellticket, NULL);
+    pthread_create(&tid3, NULL, sellticket, NULL);
+
+    // 回收子线程的资源,阻塞
+    pthread_join(tid1, NULL);
+    pthread_join(tid2, NULL);
+    pthread_join(tid3, NULL);
+
+    pthread_exit(NULL); // 退出主线程
+
+    // 释放互斥量资源
+    pthread_mutex_destroy(&mutex);
+
+    return 0;
+}
+```
+
+#### 多线程多锁，抢占锁资源
+
+![image-20211024162356465](03Linux多线程开发/image-20211024162356465.png)
+
+```c
+#include <stdio.h>
+#include <pthread.h>
+#include <unistd.h>
+
+// 创建2个互斥量
+pthread_mutex_t mutex1, mutex2;
+
+void * workA(void * arg) {
+
+    pthread_mutex_lock(&mutex1);
+    sleep(1);
+    pthread_mutex_lock(&mutex2);
+
+    printf("workA....\n");
+
+    pthread_mutex_unlock(&mutex2);
+    pthread_mutex_unlock(&mutex1);
+    return NULL;
+}
+
+
+void * workB(void * arg) {
+    pthread_mutex_lock(&mutex2);
+    sleep(1);
+    pthread_mutex_lock(&mutex1);
+
+    printf("workB....\n");
+
+    pthread_mutex_unlock(&mutex1);
+    pthread_mutex_unlock(&mutex2);
+
+    return NULL;
+}
+
+int main() {
+
+    // 初始化互斥量
+    pthread_mutex_init(&mutex1, NULL);
+    pthread_mutex_init(&mutex2, NULL);
+
+    // 创建2个子线程
+    pthread_t tid1, tid2;
+    pthread_create(&tid1, NULL, workA, NULL);
+    pthread_create(&tid2, NULL, workB, NULL);
+
+    // 回收子线程资源
+    pthread_join(tid1, NULL);
+    pthread_join(tid2, NULL);
+
+    // 释放互斥量资源
+    pthread_mutex_destroy(&mutex1);
+    pthread_mutex_destroy(&mutex2);
+
+    return 0;
+}
+```
+
+## 读写锁
+
+### 基本概念
+
+- 当有一个线程已经持有互斥锁时，互斥锁将所有试图进入临界区的线程都阻塞住。但是考虑一种情形，当前持有互斥锁的线程只是要读访问共享资源，而同时有其它几个线程也想读取这个共享资源，但是由于互斥锁的排它性，所有其它线程都无法获取锁，也就无法读访问共享资源了，但是实际上多个线程同时读访问共享资源并不会导致问题
+- 在对数据的读写操作中，**更多的是读操作，写操作较少**，例如对数据库数据的读写应用。为了满足当前能够允许多个读出，但只允许一个写入的需求，线程提供了读写锁来实现
+- 读写锁的特点
+  - 如果有其它线程读数据，则允许其它线程执行读操作，但不允许写操作
+  - 如果有其它线程写数据，则其它线程都不允许读、写操作
+  - 写是独占的，写的优先级高
+
+### 读写锁相关操作函数
+
+- 读写锁的类型：`pthread_rwlock_t`
+- 初始化读写锁：`int pthread_rwlock_init(pthread_rwlock_t *restrict rwlock, const pthread_rwlockattr_t *restrict attr);`
+
+- 释放互斥量的资源：`int pthread_rwlock_destroy(pthread_rwlock_t *rwlock);`
+- 写操作加锁：`int pthread_rwlock_rdlock(pthread_rwlock_t *rwlock);`
+- 写操作尝试加锁：`int pthread_rwlock_tryrdlock(pthread_rwlock_t *rwlock);`
+- 读操作加锁：`int pthread_rwlock_wrlock(pthread_rwlock_t *rwlock);`
+- 读操作尝试加锁：`int pthread_rwlock_trywrlock(pthread_rwlock_t *rwlock);`
+- 解锁：`int pthread_rwlock_unlock(pthread_rwlock_t *rwlock);`
+
+### 实例：读写锁实现读线程数量大于写线程数量
+
+- 8个线程操作同一个全局变量。3个线程不定时写这个全局变量，5个线程不定时的读这个全局变量
+
+```c
+#include <stdio.h>
+#include <pthread.h>
+#include <unistd.h>
+
+int num = 0;
+// 创建读写锁
+pthread_rwlock_t rwlock;
+
+void* workA(void* arg) {
+    while (1) {
+        // 加写锁
+        pthread_rwlock_wrlock(&rwlock);
+        num++;
+        printf("++write, tid : %ld, num : %d\n", pthread_self(), num);
+        // 解锁
+        pthread_rwlock_unlock(&rwlock);
+        usleep(100);
+    }
+    
+    return NULL;
+}
+
+void* workB(void* arg) {
+    while (1) {
+        // 加写锁
+        pthread_rwlock_rdlock(&rwlock);
+        printf("===read, tid : %ld, num : %d\n", pthread_self(), num);
+        // 解锁
+        pthread_rwlock_unlock(&rwlock);
+        usleep(100);
+    }
+
+    return NULL;
+}
+
+int main()
+{
+    // 初始化读写锁
+    pthread_rwlock_init(&rwlock, NULL);
+    // 创建8个线程，3个写线程，5个读线程
+    pthread_t wtids[3], rtids[5];
+    for (int i = 0; i < 3; i++) {
+        pthread_create(&wtids[i], NULL, workA, NULL);
+    }
+    for (int i = 0; i < 5; i++) {
+        pthread_create(&rtids[i], NULL, workB, NULL);
+    }
+
+    // 分离，回收资源
+    for (int i = 0; i < 3; i++) {
+        pthread_detach(wtids[i]);
+    }
+    for (int i = 0; i < 5; i++) {
+        pthread_detach(rtids[i]);
+    }
+    // 回收读写锁
+    pthread_rwlock_destroy(&rwlock);
+    // 回收主线程
+    pthread_exit(NULL);
+}
+```
+
+![image-20211024164409909](03Linux多线程开发/image-20211024164409909.png)
+
+## 生产者和消费者
+
+### 关系模型
+
+![image-20211024172038707](03Linux多线程开发/image-20211024172038707.png)
+
+### 存在问题
+
+1. 当容器满时，无法继续生产
+2. 当容器空时，无法继续消费
+3. 多个生产者或消费者时，会出现线程同步问题
+
+### 实例：简易版多生产者多消费者（互斥量，==存在未解决问题==）
+
+- 说明
+
+  - 当在删除节点时，加锁时机不同可能会导致段错误
+  - 产生错误版在虚拟机下无法产生`core`文件，以下截图来自服务器，是否使用`-g`参数都能生成`core`文件，==可能是线程函数自带能够生成？==
+  - 虚拟机版在**释放互斥锁前添加while死循环**即可正常生成`core`文件，所以不产生`core`文件的原因可能是==线程还在运行而互斥锁提前被释放了==
+
+- 正常执行版
+
+  ```c
+  #include <stdio.h>
+  #include <pthread.h>
+  #include <stdlib.h>
+  #include <unistd.h>
+  
+  // 链表作为容器
+  struct Node{
+      int val;
+      struct Node* next;
+  };
+  
+  // 头结点
+  struct Node* head = NULL;
+  
+  // 互斥量
+  pthread_mutex_t mutex;
+  
+  // 头插法增加元素
+  void* producter(void* arg) {
+      while (1) {
+          pthread_mutex_lock(&mutex);
+          struct Node* newNode = (struct Node*)malloc(sizeof(struct Node));
+          newNode->val = rand() % 1000;
+          newNode->next = head;
+          head = newNode;
+          printf("add node, num : %d, tid : %ld\n", newNode->val, pthread_self());
+          pthread_mutex_unlock(&mutex);
+          usleep(100);
+      }
+      return NULL;
+  }
+  
+  // 头删法减少元素
+  void* consumer(void* arg) {
+      while (1) {
+          pthread_mutex_lock(&mutex);
+          struct Node* tmp = head;
+          // 当链表不为空时，才能删除
+          if (head != NULL) {
+              head = head->next;
+              printf("del node, num : %d, tid : %ld\n", tmp->val, pthread_self());
+              free(tmp);
+              pthread_mutex_unlock(&mutex);
+              usleep(100);
+          } else {
+              pthread_mutex_unlock(&mutex);
+          }
+      }
+      return NULL;
+  }
+  
+  int main()
+  {
+      // 初始化互斥锁
+      pthread_mutex_init(&mutex, NULL);
+      // 创建5个生产者线程，和5个消费者线程
+      pthread_t products[5], consumes[5];
+      for (int i = 0; i < 5; i++) {
+          pthread_create(&products[i], NULL, producter, NULL);
+          pthread_create(&consumes[i], NULL, consumer, NULL);
+      }
+  
+      // 分离，回收线程资源
+      for (int i = 0; i < 5; i++) {
+          pthread_detach(products[i]);
+          pthread_detach(consumes[i]);
+      }
+  
+      // 回收互斥锁
+      pthread_mutex_destroy(&mutex);
+      pthread_exit(NULL);     // 回收主线程
+      return 0;
+  }
+  ```
+
+  ![image-20211024183604991](03Linux多线程开发/image-20211024183604991.png)
+
+- 产生错误版（==原因还不清晰，后续再看==）
+
+  ```c
+  #include <stdio.h>
+  #include <pthread.h>
+  #include <stdlib.h>
+  #include <unistd.h>
+  
+  // 链表作为容器
+  struct Node{
+      int val;
+      struct Node* next;
+  };
+  
+  // 头结点
+  struct Node* head = NULL;
+  
+  // 互斥量
+  pthread_mutex_t mutex;
+  
+  // 头插法增加元素
+  void* producter(void* arg) {
+      while (1) {
+          pthread_mutex_lock(&mutex);
+          struct Node* newNode = (struct Node*)malloc(sizeof(struct Node));
+          newNode->val = rand() % 1000;
+          newNode->next = head;
+          head = newNode;
+          printf("add node, num : %d, tid : %ld\n", newNode->val, pthread_self());
+          pthread_mutex_unlock(&mutex);
+          usleep(100);
+      }
+      return NULL;
+  }
+  
+  // 头删法减少元素
+  void* consumer(void* arg) {
+      while (1) {
+          // 如果只在头结点不为空的情况下使用互斥锁会产生段错误，暂未找到原因
+          if (head != NULL) {
+              pthread_mutex_lock(&mutex);
+              struct Node* tmp = head;
+              head = head->next;
+              printf("del node, num : %d, tid : %ld\n", tmp->val, pthread_self());
+              free(tmp);
+              tmp = NULL;
+              pthread_mutex_unlock(&mutex);
+              usleep(100);
+          }
+      }
+      return NULL;
+  }
+  
+  int main()
+  {
+      // 初始化互斥锁
+      pthread_mutex_init(&mutex, NULL);
+      // 创建5个生产者线程，和5个消费者线程
+      pthread_t products[5], consumes[5];
+      for (int i = 0; i < 5; i++) {
+          pthread_create(&products[i], NULL, producter, NULL);
+          pthread_create(&consumes[i], NULL, consumer, NULL);
+      }
+  
+      // 分离，回收线程资源
+      for (int i = 0; i < 5; i++) {
+          pthread_detach(products[i]);
+          pthread_detach(consumes[i]);
+      }
+  	
+      // 加while循环即可在虚拟机中生成core文件
+      // while (1) {
+      //     sleep(10);
+      // }
+      // 回收互斥锁
+      pthread_mutex_destroy(&mutex);
+      pthread_exit(NULL);     // 回收主线程
+      return 0;
+  }
+  ```
+
+  - 服务器
+
+    ![image-20211024190914068](03Linux多线程开发/image-20211024190914068.png)
+
+    ![image-20211024191441756](03Linux多线程开发/image-20211024191441756.png)
+
+  - 虚拟机
+
+    ![image-20211024192925831](03Linux多线程开发/image-20211024192925831.png)
+
+    ![image-20211024192944475](03Linux多线程开发/image-20211024192944475.png)
+
+## 条件变量
+
+### 条件变量相关操作函数
+
+- 当满足条件时，才执行，不是锁，配合互斥量使用
+- 条件变量的类型：`pthread_cond_t`
+- 初始化：`int pthread_cond_init(pthread_cond_t *restrict cond, const pthread_condattr_t *restrict attr);`
+- 回收：`int pthread_cond_destroy(pthread_cond_t *cond);`
+- 等待，调用了该函数，线程会阻塞：`int pthread_cond_wait(pthread_cond_t *restrict cond, pthread_mutex_t *restrict mutex);`
+- 等待多长时间，调用了这个函数，线程会阻塞，直到指定的时间结束：`int pthread_cond_timedwait(pthread_cond_t *restrict cond,  pthread_mutex_t *restrict mutex, const struct timespec *restrict abstime);`
+- 唤醒一个或者多个等待的线程：`int pthread_cond_signal(pthread_cond_t *cond);`
+- 唤醒所有的等待的线程：`int pthread_cond_broadcast(pthread_cond_t *cond);`
+
+### 实例：条件变量下的多生产者多消费者
+
+- 当有生产者生产时，通知消费者消费，否则等待
+
+```c
+#include <stdio.h>
+#include <pthread.h>
+#include <stdlib.h>
+#include <unistd.h>
+
+// 链表作为容器
+struct Node{
+    int val;
+    struct Node* next;
+};
+
+// 头结点
+struct Node* head = NULL;
+
+// 互斥量
+pthread_mutex_t mutex;
+// 条件变量
+pthread_cond_t cond;
+
+// 头插法增加元素
+void* producter(void* arg) {
+    while (1) {
+        pthread_mutex_lock(&mutex);
+        struct Node* newNode = (struct Node*)malloc(sizeof(struct Node));
+        newNode->val = rand() % 1000;
+        newNode->next = head;
+        head = newNode;
+        printf("add node, num : %d, tid : %ld\n", newNode->val, pthread_self());
+        
+        // 只要生产了一个，就通知消费者消费
+        pthread_cond_signal(&cond);
+
+        pthread_mutex_unlock(&mutex);
+        usleep(100);
+    }
+    return NULL;
+}
+
+// 头删法减少元素
+void* consumer(void* arg) {
+    while (1) {
+        pthread_mutex_lock(&mutex);
+        struct Node* tmp = head;
+        // 当链表不为空时，才能删除
+        if (head != NULL) {
+            head = head->next;
+            printf("del node, num : %d, tid : %ld\n", tmp->val, pthread_self());
+            free(tmp);
+            pthread_mutex_unlock(&mutex);
+            usleep(100);
+        } else {
+            // 没有数据，需要等待
+            // 当这个函数调用阻塞的时候，会对互斥锁进行解锁，当不阻塞的，继续向下执行，会重新加锁。
+            pthread_cond_wait(&cond, &mutex);
+            pthread_mutex_unlock(&mutex);
+        }
+    }
+    return NULL;
+}
+
+int main()
+{
+    // 初始化互斥锁
+    pthread_mutex_init(&mutex, NULL);
+    // 初始化条件变量
+    pthread_cond_init(&cond, NULL);
+    // 创建5个生产者线程，和5个消费者线程
+    pthread_t products[5], consumes[5];
+    for (int i = 0; i < 5; i++) {
+        pthread_create(&products[i], NULL, producter, NULL);
+        pthread_create(&consumes[i], NULL, consumer, NULL);
+    }
+
+    // 分离，回收线程资源
+    for (int i = 0; i < 5; i++) {
+        pthread_detach(products[i]);
+        pthread_detach(consumes[i]);
+    }
+
+    while (1) {
+        sleep(10);
+    }
+    // 回收条件变量
+    pthread_cond_destroy(&cond);
+    // 回收互斥锁
+    pthread_mutex_destroy(&mutex);
+    pthread_exit(NULL);     // 回收主线程
+    return 0;
+}
+```
+
+![image-20211024204722129](03Linux多线程开发/image-20211024204722129.png)
+
+## 信号量
+
+### 信号量相关操作函数
+
+- 信号量的类型：`sem_t`
+- `int sem_init(sem_t *sem, int pshared, unsigned int value);`
+  - 功能：初始化信号量
+  - 参数
+    - `sem`：信号量变量的地址
+    - `pshared`：0 用在线程间 ，非0 用在进程间
+    - `value `：信号量中的值，代表容器大小
+- `int sem_destroy(sem_t *sem);`
+  - 功能：释放资源
+- `int sem_wait(sem_t *sem);`
+  - 功能：对信号量加锁，调用一次对信号量的值-1，如果值为0，就阻塞
+- `int sem_trywait(sem_t *sem);`
+- `int sem_timedwait(sem_t *sem, const struct timespec *abs_timeout);`
+- `int sem_post(sem_t *sem);`
+  - 功能：对信号量解锁，调用一次对信号量的值+1
+- `int sem_getvalue(sem_t *sem, int *sval);`
+
+### 实例：信号量下的多生产者多消费者
+
+- 不需要单独判断`容器`为空的情况
+
+```c
+#include <stdio.h>
+#include <pthread.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <semaphore.h>
+
+// 链表作为容器
+struct Node{
+    int val;
+    struct Node* next;
+};
+
+// 头结点
+struct Node* head = NULL;
+
+// 互斥量
+pthread_mutex_t mutex;
+// 信号量
+sem_t psem;
+sem_t csem;
+
+// 头插法增加元素
+void* producter(void* arg) {
+    while (1) {
+        sem_wait(&psem);
+        pthread_mutex_lock(&mutex);
+        struct Node* newNode = (struct Node*)malloc(sizeof(struct Node));
+        newNode->val = rand() % 1000;
+        newNode->next = head;
+        head = newNode;
+        printf("add node, num : %d, tid : %ld\n", newNode->val, pthread_self());
+        pthread_mutex_unlock(&mutex);
+        sem_post(&csem);
+    }
+    return NULL;
+}
+
+// 头删法减少元素
+void* consumer(void* arg) {
+    while (1) {
+        sem_wait(&csem);
+        pthread_mutex_lock(&mutex);
+        struct Node* tmp = head;
+        // 当链表不为空时，才能删除
+        if (head != NULL) {
+            head = head->next;
+            printf("del node, num : %d, tid : %ld\n", tmp->val, pthread_self());
+            free(tmp);
+            pthread_mutex_unlock(&mutex);
+            sem_post(&psem);
+        }
+    }
+    return NULL;
+}
+
+int main()
+{
+    // 初始化互斥锁
+    pthread_mutex_init(&mutex, NULL);
+    // 初始化信号量
+    // 最多生产8个
+    sem_init(&psem, 0, 8);
+    // 初始没有东西可以消费
+    sem_init(&csem, 0, 0);
+
+    // 创建5个生产者线程，和5个消费者线程
+    pthread_t products[5], consumes[5];
+    for (int i = 0; i < 5; i++) {
+        pthread_create(&products[i], NULL, producter, NULL);
+        pthread_create(&consumes[i], NULL, consumer, NULL);
+    }
+
+    // 分离，回收线程资源
+    for (int i = 0; i < 5; i++) {
+        pthread_detach(products[i]);
+        pthread_detach(consumes[i]);
+    }
+
+    while (1) {
+        sleep(10);
+    }
+    // 回收信号量
+    sem_destroy(&csem);
+    sem_destroy(&psem);
+    // 回收互斥锁
+    pthread_mutex_destroy(&mutex);
+    pthread_exit(NULL);     // 回收主线程
+    return 0;
+}
+```
+
+![image-20211024211933732](03Linux多线程开发/image-20211024211933732.png)
