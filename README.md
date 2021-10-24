@@ -1,6 +1,6 @@
 # 说明
 
-本项目来源于[牛客Linux高并发服务器项目](https://www.nowcoder.com/courses/cover/live/504)，`code`用于保存学习过程中代码文件，`doc`用于保存笔记，`slide`用于保存官方课件
+本项目来源于[牛客Linux高并发服务器项目](https://www.nowcoder.com/courses/cover/live/504)，`doc`用于保存笔记，`slide`用于保存官方课件
 
 # 笔记目录
 
