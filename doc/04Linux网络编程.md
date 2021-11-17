@@ -614,5 +614,76 @@ typedef uint32_t in_addr_t;
 #define __SOCKADDR_COMMON_SIZE (sizeof (unsigned short int))
 ```
 
+## IP地址转换
 
+- `点分十进制`IP地址与`网络字节序整数`IP地址相互转换
+
+  > 通常，人们习惯用可读性好的字符串来表示 IP 地址，比如用点分十进制字符串表示 IPv4 地址，以及用十六进制字符串表示 IPv6 地址。但编程中我们需要先把它们转化为整数（二进制数）方能使用。而记录日志时则相反，我们要把整数表示的 IP 地址转化为可读的字符串
+
+- 旧版（已弃用）：只适用于IPV4间的转换
+
+  ```c
+  #include <arpa/inet.h> 
+  in_addr_t inet_addr(const char *cp); 
+  int inet_aton(const char *cp, struct in_addr *inp); 
+  char *inet_ntoa(struct in_addr in);
+  ```
+
+- 新版：同时适用于IPV4和IPV6
+
+  - 字母含义
+    - `p`：点分十进制的IP字符串
+    - `n`：表示network，网络字节序的整数 
+  - `int inet_pton(int af, const char *src, void *dst); `
+    - 使用`man inet_pton`查看帮助
+    - 功能：将点分十进制的IP地址字符串，转换成网络字节序的整数
+    - 参数
+      - `af`：地址族
+        - IPV4：`AF_INET`
+        - IPV6：`AF_INET6(IPV6)` 
+      - `src`：需要转换的点分十进制的IP字符串 
+      - `dst`：转换后的结果保存在这个里面 
+    - 返回值
+      - 1：成功
+      - 0：源IP地址有误
+      - -1：地址族包含不可用的地址协议
+  - `const char *inet_ntop(int af, const void *src, char *dst, socklen_t size);`
+    - 使用`man inet_ntop`查看帮助
+    - 功能：将网络字节序的整数，转换成点分十进制的IP地址字符串
+    - 参数
+      - `af`：地址族
+        - IPV4：`AF_INET`
+        - IPV6：`AF_INET6(IPV6)` 
+      - `src`：要转换的ip的整数的地址 
+      - `dst`：转换成IP地址字符串保存的地方 
+      - `size`：第三个参数的大小（数组的大小） 
+    - 返回值：返回转换后的数据的地址（字符串），和 dst 是一样的 
+
+  ```c
+  #include <stdio.h>
+  #include <arpa/inet.h>
+  
+  int main() {
+  
+      // 创建一个ip字符串,点分十进制的IP地址字符串
+      char buf[] = "192.168.1.4";
+      unsigned int num = 0;
+  
+      // 将点分十进制的IP字符串转换成网络字节序的整数
+      inet_pton(AF_INET, buf, &num);
+      unsigned char * p = (unsigned char *)&num;
+      printf("%d %d %d %d\n", *p, *(p+1), *(p+2), *(p+3));
+  
+  
+      // 将网络字节序的IP整数转换成点分十进制的IP字符串
+      char ip[16] = "";
+      const char * str =  inet_ntop(AF_INET, &num, ip, 16);
+      printf("str : %s\n", str);
+      printf("ip : %s\n", ip);
+  
+      return 0;
+  }
+  ```
+
+  ![image-20211117221901175](04Linux网络编程/image-20211117221901175.png)
 
