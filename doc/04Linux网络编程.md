@@ -687,3 +687,286 @@ typedef uint32_t in_addr_t;
 
   ![image-20211117221901175](04Linux网络编程/image-20211117221901175.png)
 
+## TCP与UDP区别
+
+### 简介
+
+- `UDP`：用户数据报协议，面向无连接，可以单播，多播，广播， 面向数据报，不可靠 
+- `TCP`：传输控制协议，面向连接的，可靠的，基于字节流，仅支持单播传输 
+
+### 对比
+
+|                |              UDP               |            TCP             |
+| :------------: | :----------------------------: | :------------------------: |
+|  是否创建连接  |             无连接             |          面向连接          |
+|    是否可靠    |             不可靠             |           可靠的           |
+| 连接的对象个数 | 一对一、一对多、多对一、多对多 |        仅支持一对一        |
+|   传输的方式   |           面向数据报           |         面向字节流         |
+|    首部开销    |            8个字节             |        最少20个字节        |
+|    适用场景    |   实时应用（视频会议，直播）   | 可靠性高的应用（文件传输） |
+
+## TCP通信流程
+
+### 流程图
+
+![image-20211121104748003](04Linux网络编程/image-20211121104748003.png)
+
+### 服务器端（被动接收连接）
+
+1. 创建一个用于监听的套接字
+   - 监听：监听有客户端的连接
+   - 套接字：这个套接字其实就是一个文件描述符 
+2. 将这个`监听文件描述符`和**本地的IP和端口绑定**（IP和端口就是服务器的地址信息）
+   - 客户端连接服务器的时候使用的就是这个IP和端口
+3. 设置监听，`监听的fd`开始工作 
+4. 阻塞等待，当有客户端发起连接，解除阻塞，接受客户端的连接，会得到一个`和客户端通信的套接字(fd)`
+5. 通信
+   - 接收数据
+   - 发送数据
+6. 通信结束，断开连接
+
+### 客户端
+
+1. 创建一个用于通信的套接字(fd)
+2. 连接服务器，需要指定连接的服务器的 IP 和 端口 
+3. 连接成功了，客户端可以直接和服务器通信 
+   - 接收数据
+   - 发送数据
+4. 通信结束，断开连接
+
+## 套接字函数
+
+- 包含在下列头文件中
+
+  ```c
+  #include <sys/types.h> 
+  #include <sys/socket.h> 
+  #include <arpa/inet.h> // 包含了这个头文件，上面两个就可以省略(因为已经包含上面两个)
+  ```
+
+- 函数一览
+
+  ```c
+  int socket(int domain, int type, int protocol);
+  int bind(int sockfd, const struct sockaddr *addr, socklen_t addrlen);
+  int listen(int sockfd, int backlog);
+  int accept(int sockfd, struct sockaddr *addr, socklen_t *addrlen);
+  int connect(int sockfd, const struct sockaddr *addr, socklen_t addrlen);
+  ```
+
+- `int socket(int domain, int type, int protocol);`
+
+  - 功能：创建一个套接字
+  - 参数：
+    - `domain`：协议族(常用如下)
+      - `AF_INET` ：`ipv4`
+      -  `AF_INET`6 ：`ipv6`
+      - `AF_UNIX`, `AF_LOCAL`：本地套接字通信（进程间通信） 
+    - `type`：通信过程中使用的协议类型 
+      - `SOCK_STREAM` : 流式协议
+      - `SOCK_DGRAM` : 报式协议 
+    - `protocol`：具体的一个协议，一般写0，用于指定type参数的默认协议类型
+      - `SOCK_STREAM` : 流式协议默认使用 TCP 
+      - `SOCK_DGRAM` : 报式协议默认使用 UDP 
+  - 返回值
+    - 成功：返回文件描述符，操作的就是内核缓冲区
+    - 失败：-1 
+
+- `int bind(int sockfd, const struct sockaddr *addr, socklen_t addrlen); `
+
+  - 功能：绑定，将fd 和本地的IP和端口进行绑定 
+  - 参数：
+    - `sockfd`：通过socket函数得到的文件描述符 
+    - `addr`：需要绑定的socket地址，这个地址封装了**本地的ip和端口号的信息**
+    - `addrlen`：第二个参数结构体占的内存大小 
+  - 返回值：成功：0，失败：-1
+
+- `int listen(int sockfd, int backlog);`
+
+  - 功能：监听这个socket上的连接
+
+  - 参数：
+
+    - `sockfd`：通过socket()函数得到的文件描述符
+
+    - `backlog`：未连接的和已经连接的和的最大值，可用`cat /proc/sys/net/core/somaxconn`查看Linux设置值，==一般指定5就可以（视频说的，是否正确待验证）==
+
+      ![image-20211121111847282](04Linux网络编程/image-20211121111847282.png)
+
+  - 返回值：成功：0，失败：-1
+
+- `int accept(int sockfd, struct sockaddr *addr, socklen_t *addrlen); `
+
+  - 功能：接收客户端连接，默认是一个阻塞的函数，阻塞等待客户端连接
+  - 参数：
+    - `sockfd` : 用于监听的文件描述符 
+    - `addr` : 传出参数，记录了连接成功后**客户端的地址信息**（ip，port） 
+    - `addrlen` : 指定第二个参数的对应的内存大小
+  - 返回值：
+    - 成功：用于通信的文件描述符 
+    - 失败：-1
+
+- `int connect(int sockfd, const struct sockaddr *addr, socklen_t addrlen);`
+
+  - 功能： 客户端连接服务器 
+  - 参数：
+    - `sockfd` : 用于**通信的文件描述符 **
+    - `addr` : 客户端要连接的服务器的地址信息
+    - `addrlen` : 指定第二个参数的对应的内存大小
+  - 返回值：成功 0， 失败 -1 
+
+- 其他读写函数：
+
+  ```c
+  ssize_t write(int fd, const void *buf, size_t count); // 写数据 
+  ssize_t read(int fd, void *buf, size_t count); // 读数据
+  ```
+
+## 实例：TCP通信
+
+### 服务器端
+
+```c
+#include <stdio.h>
+#include <arpa/inet.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <string.h>
+
+#define SERVERIP "127.0.0.1"
+#define PORT 6789
+
+int main()
+{
+    // 1. 创建socket（用于监听的套接字）
+    int listenfd = socket(AF_INET, SOCK_STREAM, 0);
+    if (listenfd == -1) {
+        perror("socket");
+        exit(-1);
+    }
+
+    // 2. 绑定
+    struct sockaddr_in server_addr;
+    server_addr.sin_family = PF_INET;
+    // 点分十进制转换为网络字节序
+    inet_pton(AF_INET, SERVERIP, &server_addr.sin_addr.s_addr);
+    // 服务端也可以绑定0.0.0.0即任意地址
+    // server_addr.sin_addr.s_addr = INADDR_ANY;
+    server_addr.sin_port = htons(PORT);
+    int ret = bind(listenfd, (struct sockaddr*)&server_addr, sizeof(server_addr));
+    if (ret == -1) {
+        perror("bind");
+        exit(-1);
+    }
+
+    // 3. 监听
+    ret = listen(listenfd, 8);
+        if (ret == -1) {
+        perror("listen");
+        exit(-1);
+    }
+
+    // 4. 接收客户端连接
+    struct sockaddr_in client_addr;
+    socklen_t client_addr_len = sizeof(client_addr);
+    int connfd = accept(listenfd, (struct sockaddr*)&client_addr, &client_addr_len);
+    if (connfd == -1) {
+        perror("accept");
+        exit(-1);
+    }
+    // 输出客户端信息，IP组成至少16个字符（包含结束符）
+    char client_ip[16] = {0};
+    inet_ntop(AF_INET, &client_addr.sin_addr.s_addr, client_ip, sizeof(client_ip));
+    unsigned short client_port = ntohs(client_addr.sin_port);
+    printf("ip:%s, port:%d\n", client_ip, client_port);
+
+
+    // 5. 开始通信
+    // 服务端先接收客户端信息，再向客户端发送数据
+    // 接收数据
+    char recv_buf[1024] = {0};
+    while (1) {
+        ret = read(connfd, recv_buf, sizeof(recv_buf));
+        if (ret == -1) {
+            perror("read");
+            exit(-1);
+        } else if (ret > 0) {
+            printf("recv client data : %s\n", recv_buf);
+        } else {
+            // 表示客户端断开连接
+            printf("client closed...\n");
+            break;
+        }
+        // 发送数据
+        char *send_buf = "hello, i am server";
+        // 粗心写成sizeof，那么就会导致遇到空格终止
+        write(connfd, send_buf, strlen(send_buf));
+    }
+
+    // 关闭文件描述符
+    close(connfd);
+    close(listenfd);
+    return 0;
+}
+```
+
+### 客户端
+
+```c
+#include <stdio.h>
+#include <arpa/inet.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <string.h>
+
+#define SERVERIP "127.0.0.1"
+#define PORT 6789
+
+int main()
+{
+    // 1. 创建socket（用于通信的套接字）
+    int connfd = socket(AF_INET, SOCK_STREAM, 0);
+    if (connfd == -1) {
+        perror("socket");
+        exit(-1);
+    }
+    // 2. 连接服务器端
+    struct sockaddr_in server_addr;
+    server_addr.sin_family = PF_INET;
+    inet_pton(AF_INET, SERVERIP, &server_addr.sin_addr.s_addr);
+    server_addr.sin_port = htons(PORT);
+    int ret = connect(connfd, (struct sockaddr*)&server_addr, sizeof(server_addr));
+    if (ret == -1) {
+        perror("connect");
+        exit(-1);
+    }
+    // 3. 通信
+            char recv_buf[1024] = {0};
+    while (1) {
+        // 发送数据
+        char *send_buf = "client message";
+        // 粗心写成sizeof，那么就会导致遇到空格终止
+        write(connfd, send_buf, strlen(send_buf));
+        sleep(1);
+        // 接收数据
+        ret = read(connfd, recv_buf, sizeof(recv_buf));
+        if (ret == -1) {
+            perror("read");
+            exit(-1);
+        } else if (ret > 0) {
+            printf("recv client data : %s\n", recv_buf);
+        } else {
+            // 表示服务端断开连接
+            printf("server closed...\n");
+            break;
+        }
+    }
+    // 关闭连接
+    close(connfd);
+    return 0;
+}
+```
+
+### 通信效果
+
+![image-20211121133101783](04Linux网络编程/image-20211121133101783.png)
