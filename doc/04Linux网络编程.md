@@ -1691,7 +1691,7 @@ int main()
 
 - `select`参数列表说明
 
-  - `fd_set`：是一块固定大小的缓冲区，`sizeof(fd_set)=128`，即对应1024个比特位
+  - `fd_set`：是一块固定大小的缓冲区(结构体)，`sizeof(fd_set)=128`，即对应1024个比特位
 
   - `timeval `：结构体类型
 
@@ -1719,4 +1719,186 @@ int main()
 4. 内核检测完毕后，返回给用户态结果
 
    ![image-20211124233108458](04Linux网络编程/image-20211124233108458.png)
+
+### 代码实现
+
+#### 注意事项
+
+- `select`中需要的监听集合需要两个
+  - 一个是用户态真正需要监听的集合`rSet`
+  - 一个是内核态返回给用户态的修改集合`tmpSet`
+- 需要先判断监听文件描述符是否发生改变
+  - 如果改变了，说明有客户端连接，此时需要将**新的连接文件描述符加入到`rSet`**，并更新最大文件描述符
+  - 如果没有改变，说明没有客户端连接
+- 由于`select`无法确切知道哪些文件描述符发生了改变，所以需要执行遍历操作，使用`FD_ISSET`判断是否发生了改变
+- 如果客户端断开了连接，需要从`rSet`中清除需要监听的文件描述符
+- <font color='red'>程序存在的问题：断开连接后，最大文件描述符怎么更新？</font>
+
+#### 服务端
+
+```c++
+#include <stdio.h>
+#include <arpa/inet.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <string.h>
+#include <sys/select.h>
+
+#define SERVERIP "127.0.0.1"
+#define PORT 6789
+
+
+int main()
+{
+    // 1. 创建socket（用于监听的套接字）
+    int listenfd = socket(AF_INET, SOCK_STREAM, 0);
+    if (listenfd == -1) {
+        perror("socket");
+        exit(-1);
+    }
+    // 2. 绑定
+    struct sockaddr_in server_addr;
+    server_addr.sin_family = PF_INET;
+    // 点分十进制转换为网络字节序
+    inet_pton(AF_INET, SERVERIP, &server_addr.sin_addr.s_addr);
+    // 服务端也可以绑定0.0.0.0即任意地址
+    // server_addr.sin_addr.s_addr = INADDR_ANY;
+    server_addr.sin_port = htons(PORT);
+    int ret = bind(listenfd, (struct sockaddr*)&server_addr, sizeof(server_addr));
+    if (ret == -1) {
+        perror("bind");
+        exit(-1);
+    }
+    // 3. 监听
+    ret = listen(listenfd, 8);
+        if (ret == -1) {
+        perror("listen");
+        exit(-1);
+    }
+    // 创建读检测集合
+    // rSet用于记录正在的监听集合，tmpSet用于记录在轮训过程中由内核态返回到用户态的集合
+    fd_set rSet, tmpSet;
+    // 清空
+    FD_ZERO(&rSet);
+    // 将监听文件描述符加入
+    FD_SET(listenfd, &rSet);
+    // 此时最大的文件描述符为监听描述符
+    int maxfd = listenfd;
+    // 不断循环等待客户端连接
+    while (1) {
+        tmpSet = rSet;
+        // 使用select，设置为永久阻塞，有文件描述符变化才返回
+        int num = select(maxfd + 1, &tmpSet, NULL, NULL, NULL);
+        if (num == -1) {
+            perror("select");
+            exit(-1);
+        } else if (num == 0) {
+            // 当前无文件描述符有变化，执行下一次遍历
+            // 在本次设置中无效（因为select被设置为永久阻塞）
+            continue;
+        } else {
+            // 首先判断监听文件描述符是否发生改变（即是否有客户端连接）
+            if (FD_ISSET(listenfd, &tmpSet)) {
+                // 4. 接收客户端连接
+                struct sockaddr_in client_addr;
+                socklen_t client_addr_len = sizeof(client_addr);
+                int connfd = accept(listenfd, (struct sockaddr*)&client_addr, &client_addr_len);
+                if (connfd == -1) {
+                    perror("accept");
+                    exit(-1);
+                }
+                // 输出客户端信息，IP组成至少16个字符（包含结束符）
+                char client_ip[16] = {0};
+                inet_ntop(AF_INET, &client_addr, client_ip, sizeof(client_ip));
+                unsigned short client_port = ntohs(client_addr.sin_port);
+                printf("ip:%s, port:%d\n", client_ip, client_port);
+
+                FD_SET(connfd, &rSet);
+                // 更新最大文件符
+                maxfd = maxfd > connfd ? maxfd : connfd;
+            }
+
+            // 遍历集合判断是否有变动，如果有变动，那么通信
+            char recv_buf[1024] = {0};
+            for (int i = listenfd + 1; i <= maxfd; i++) {
+                if (FD_ISSET(i, &tmpSet)) {
+                    ret = read(i, recv_buf, sizeof(recv_buf));
+                    if (ret == -1) {
+                        perror("read");
+                        exit(-1);
+                    } else if (ret > 0) {
+                        printf("recv server data : %s\n", recv_buf);
+                        write(i, recv_buf, strlen(recv_buf));
+                    } else {
+                        // 表示客户端断开连接
+                        printf("client closed...\n");
+                        close(i);
+                        FD_CLR(i, &rSet);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    close(listenfd);
+    return 0;
+}
+```
+
+#### 客户端
+
+```c++
+#include <stdio.h>
+#include <arpa/inet.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <string.h>
+
+#define SERVERIP "127.0.0.1"
+#define PORT 6789
+
+int main()
+{
+    // 1. 创建socket（用于通信的套接字）
+    int connfd = socket(AF_INET, SOCK_STREAM, 0);
+    if (connfd == -1) {
+        perror("socket");
+        exit(-1);
+    }
+    // 2. 连接服务器端
+    struct sockaddr_in server_addr;
+    server_addr.sin_family = PF_INET;
+    inet_pton(AF_INET, SERVERIP, &server_addr.sin_addr.s_addr);
+    server_addr.sin_port = htons(PORT);
+    int ret = connect(connfd, (struct sockaddr*)&server_addr, sizeof(server_addr));
+    if (ret == -1) {
+        perror("connect");
+        exit(-1);
+    }
+    // 3. 通信
+    char recv_buf[1024] = {0};
+    while (1) {
+        // 发送数据
+        char *send_buf = "client message";
+        write(connfd, send_buf, strlen(send_buf));
+        // 接收数据
+        ret = read(connfd, recv_buf, sizeof(recv_buf));
+        if (ret == -1) {
+            perror("read");
+            exit(-1);
+        } else if (ret > 0) {
+            printf("recv server data : %s\n", recv_buf);
+        } else {
+            // 表示客户端断开连接
+            printf("client closed...\n");
+        }
+        // 休眠的目的是为了更好的观察，放在此处可以解决read: Connection reset by peer问题
+        sleep(1);
+    }
+    // 关闭连接
+    close(connfd);
+    return 0;
+}
+```
 
