@@ -2194,6 +2194,7 @@ int main()
       - 读事件：`EPOLLIN`
       - 写事件：`EPOLLOUT `
       - 错误事件：`EPOLLERR`
+      - 设置边沿触发：`EPOLLET`（默认水平触发）
   - 返回值：成功0，失败-1
 - `int epoll_wait(int epfd, struct epoll_event *events, int maxevents, int timeout);`
   - 功能：检测哪些文件描述符发生了改变
@@ -2376,6 +2377,238 @@ int main()
         // 发送数据
         char *send_buf = "client message";
         write(connfd, send_buf, strlen(send_buf));
+        // 接收数据
+        ret = read(connfd, recv_buf, sizeof(recv_buf));
+        if (ret == -1) {
+            perror("read");
+            exit(-1);
+        } else if (ret > 0) {
+            printf("recv server data : %s\n", recv_buf);
+        } else {
+            // 表示客户端断开连接
+            printf("client closed...\n");
+        }
+        // 休眠的目的是为了更好的观察，放在此处可以解决read: Connection reset by peer问题
+        sleep(1);
+    }
+    // 关闭连接
+    close(connfd);
+    return 0;
+}
+```
+
+### 工作模式(LT与ET)
+
+#### 水平触发(level triggered, LT)
+
+- epoll的缺省的工作方式，并且同时支持 block 和 non-block socket
+- 在这种做法中，内核告诉你一个文件描述符是否就绪了，然后你可以对这个就绪的 fd 进行 IO 操作。如果你不作任何操作，内核还是会继续通知你的
+
+#### 边沿触发(edge triggered, ET)
+
+- 是高速工作方式，只支持 non-block socket，需要对监听文件描述符设置才能实现
+- 在这种模式下，当描述符从未就绪变为就绪时，内核通过epoll告诉你。然后它会假设你知道文件描述符已经就绪，并且不会再为那个文件描述符发送更多的就绪通知，直到你做了某些操作导致那个文件描述符不再为就绪状态了。但是请注意，如果一直不对这个 fd 作 IO 操作（从而导致它再次变成未就绪），内核不会发送更多的通知（only once）
+
+#### 区别与说明
+
+- ET 模式在很大程度上减少了 epoll 事件被重复触发的次数，因此效率要比 LT 模式高
+- epoll工作在 ET 模式的时候，必须使用非阻塞套接口，以避免由于一个文件句柄的阻塞读/阻塞写操作把处理多个文件描述符的任务饿死
+- 所以如果使用ET且缓冲区内容不能一次性读完，**需要写一个循环将内容全部读取，且需要将套接字设置为非阻塞**
+
+- 说明：假设委托内核检测读事件，即检测fd的读缓冲区，那么如果读缓冲区有数据 ，epoll检测到了会给用户通知
+  - LT
+    - 用户不读数据，数据一直在缓冲区，epoll 会一直通知
+    - 用户只读了一部分数据，epoll会通知
+    - 缓冲区的数据读完了，不通知
+  - ET
+    - 用户不读数据，数据一致在缓冲区中，epoll下次检测的时候就不通知了
+    - 用户只读了一部分数据，epoll不通知
+    - 缓冲区的数据读完了，不通知
+
+#### 代码(ET)
+
+##### 服务端
+
+```c++
+#include <stdio.h>
+#include <arpa/inet.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <string.h>
+#include <sys/epoll.h>
+#include <fcntl.h>
+#include <errno.h>
+
+#define SERVERIP "127.0.0.1"
+#define PORT 6789
+
+
+int main()
+{
+    // 1. 创建socket（用于监听的套接字）
+    int listenfd = socket(AF_INET, SOCK_STREAM, 0);
+    if (listenfd == -1) {
+        perror("socket");
+        exit(-1);
+    }
+    int opt = 1;
+    setsockopt(listenfd, SOL_SOCKET, SO_REUSEPORT, &opt, sizeof(opt));
+
+    // 2. 绑定
+    struct sockaddr_in server_addr;
+    server_addr.sin_family = PF_INET;
+    // 点分十进制转换为网络字节序
+    inet_pton(AF_INET, SERVERIP, &server_addr.sin_addr.s_addr);
+    // 服务端也可以绑定0.0.0.0即任意地址
+    // server_addr.sin_addr.s_addr = INADDR_ANY;
+    server_addr.sin_port = htons(PORT);
+    int ret = bind(listenfd, (struct sockaddr*)&server_addr, sizeof(server_addr));
+    if (ret == -1) {
+        perror("bind");
+        exit(-1);
+    }
+    // 3. 监听
+    ret = listen(listenfd, 8);
+        if (ret == -1) {
+        perror("listen");
+        exit(-1);
+    }
+    
+    // 创建epoll实例
+    int epfd = epoll_create(100);
+    // 将监听文件描述符加入实例
+    struct epoll_event event;
+    event.events = EPOLLIN;
+    event.data.fd = listenfd;
+    ret = epoll_ctl(epfd, EPOLL_CTL_ADD, listenfd, &event);
+    if (ret == -1) {
+        perror("epoll_ctl");
+        exit(-1);
+    }
+    // 此结构体用来保存内核态返回给用户态发生改变的文件描述符信息
+    struct epoll_event events[1024];
+    // 不断循环等待客户端连接
+    while (1) {
+        // 使用epoll，设置为永久阻塞，有文件描述符变化才返回
+        int num = epoll_wait(epfd, events, 1024, -1);
+        // 方便观察epoll通知了几次
+        printf("num = %d\n", num);
+        if (num == -1) {
+            perror("poll");
+            exit(-1);
+        } else if (num == 0) {
+            // 当前无文件描述符有变化，执行下一次遍历
+            // 在本次设置中无效（因为select被设置为永久阻塞）
+            continue;
+        } else {
+            // 遍历发生改变的文件描述符集合
+            for (int i = 0; i < num; i++) {
+                // 判断监听文件描述符是否发生改变（即是否有客户端连接）
+                int curfd = events[i].data.fd;
+                if (curfd == listenfd) {
+                    // 4. 接收客户端连接
+                    struct sockaddr_in client_addr;
+                    socklen_t client_addr_len = sizeof(client_addr);
+                    int connfd = accept(listenfd, (struct sockaddr*)&client_addr, &client_addr_len);
+                    if (connfd == -1) {
+                        perror("accept");
+                        exit(-1);
+                    }
+                    // 输出客户端信息，IP组成至少16个字符（包含结束符）
+                    char client_ip[16] = {0};
+                    inet_ntop(AF_INET, &client_addr.sin_addr.s_addr, client_ip, sizeof(client_ip));
+                    unsigned short client_port = ntohs(client_addr.sin_port);
+                    printf("ip:%s, port:%d\n", client_ip, client_port);
+                    // 将通信套接字设置为非阻塞
+                    int flag = fcntl(connfd, F_GETFL);
+                    flag |= O_NONBLOCK;
+                    fcntl(connfd, F_SETFL, flag);
+
+                    // 将信息加入监听集合，设置为ET模式
+                    event.events = EPOLLIN | EPOLLET;
+                    event.data.fd = connfd;
+                    epoll_ctl(epfd, EPOLL_CTL_ADD, connfd, &event);
+                } else {
+                    // 只检测读事件
+                    if (events[i].events & EPOLLOUT) {
+                        continue;
+                    }
+                    // 接收消息，将缓冲区减少，这样能更好说明一次性无法读取数据时，epoll的操作
+                    // 需要循环读取数据
+                    char recv_buf[5] = {0};
+                    while ((ret = read(curfd, recv_buf, sizeof(recv_buf))) > 0) {
+                        // 应该是打印的时候最后没有结束符
+                        char test_buf[6] = {0};
+                        strcpy(test_buf, recv_buf);
+                        printf("recv server data : %s\n", test_buf);
+                        // write(STDOUT_FILENO, recv_buf, ret);
+                        // write(curfd, recv_buf, strlen(recv_buf));
+                        write(curfd, recv_buf, sizeof(recv_buf));
+                        memset(recv_buf, 0, sizeof(recv_buf));
+                    }
+                    if (ret == -1) {
+                        if(errno == EAGAIN) {
+                            printf("data over...\n");
+                        }else {
+                            perror("read");
+                            exit(-1);
+                        }
+                    } else {
+                        // 表示客户端断开连接
+                        printf("client closed...\n");
+                        close(curfd);
+                        epoll_ctl(epfd, EPOLL_CTL_DEL, curfd, NULL);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    close(listenfd);
+    close(epfd);
+    return 0;
+}
+```
+
+##### 客户端
+
+```c++
+#include <stdio.h>
+#include <arpa/inet.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <string.h>
+
+#define SERVERIP "127.0.0.1"
+#define PORT 6789
+
+int main()
+{
+    // 1. 创建socket（用于通信的套接字）
+    int connfd = socket(AF_INET, SOCK_STREAM, 0);
+    if (connfd == -1) {
+        perror("socket");
+        exit(-1);
+    }
+    // 2. 连接服务器端
+    struct sockaddr_in server_addr;
+    server_addr.sin_family = PF_INET;
+    inet_pton(AF_INET, SERVERIP, &server_addr.sin_addr.s_addr);
+    server_addr.sin_port = htons(PORT);
+    int ret = connect(connfd, (struct sockaddr*)&server_addr, sizeof(server_addr));
+    if (ret == -1) {
+        perror("connect");
+        exit(-1);
+    }
+    // 3. 通信
+    char recv_buf[1024] = {0};
+    while (1) {
+        // 发送数据，修改为从键盘获取内容
+        fgets(recv_buf, sizeof(recv_buf), stdin);
+        write(connfd, recv_buf, strlen(recv_buf));
+        // 因为用的时同一个数组，不清空就会有残留数据
+        memset(recv_buf, 0, sizeof(recv_buf));
         // 接收数据
         ret = read(connfd, recv_buf, sizeof(recv_buf));
         if (ret == -1) {
