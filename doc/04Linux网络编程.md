@@ -2629,3 +2629,133 @@ int main()
 }
 ```
 
+# UDP与本地套接字
+
+## 说明
+
+本部分笔记及源码出自`slide/04Linux网络编程/04 UDP与本地套接字`
+
+## UDP通信
+
+### 通信流程
+
+![image-20211127210835952](04Linux网络编程/image-20211127210835952.png)
+
+### 消息收发函数
+
+- `ssize_t sendto(int sockfd, const void *buf, size_t len, int flags, const struct sockaddr *dest_addr, socklen_t addrlen);`
+  - 功能：udp发送消息函数
+  - 参数
+    - `sockfd`：通信的套接字(文件描述符)
+    - `buf`：要发送的数据 
+    - `len`：发送数据的长度 
+    - `flags`：设置为0即可
+    - `dest_addr`：通信的另外一端的地址信息 
+    - `addrlen`：地址的内存大小，即`sizeof(dest_addr)`
+  - 返回值：失败-1，否则返回发送数据大小
+- `ssize_t recvfrom(int sockfd, void *buf, size_t len, int flags, struct sockaddr *src_addr, socklen_t *addrlen); `
+  - 功能：udp接收消息函数
+  - 参数
+    - `sockfd`：通信的套接字(文件描述符)
+    - `buf`：接收的数据 
+    - `len`：接收数据的长度 
+    - `flags`：设置为0即可
+    - `dest_addr`：通信的另外一端的地址信息，不需要设置为NULL即可
+    - `addrlen`：地址的内存大小，即`sizeof(dest_addr)`
+  - 返回值：失败-1，否则返回发送数据大小
+
+### 实例：UDP通信
+
+#### 说明
+
+- 服务端不需要设置监听文件描述符=>因为不需要三次握手
+- 不需要多进程/多线程，或者IO多路复用即可实现多并发
+
+#### 服务端
+
+```c
+#include <stdio.h>
+#include <arpa/inet.h>
+#include <stdlib.h>
+#include <string.h>
+
+#define SERVERIP "127.0.0.1"
+#define PORT 6789
+
+int main()
+{
+    // 1. 创建通信套接字
+    int connfd = socket(PF_INET, SOCK_DGRAM, 0);
+    // 2. 绑定本机地址(服务端)
+    struct sockaddr_in server_addr;
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_port = htons(PORT);
+    inet_pton(AF_INET, SERVERIP, &server_addr.sin_addr.s_addr);
+    int ret = bind(connfd, (struct sockaddr*)&server_addr, sizeof(server_addr));
+    if(ret == -1) {
+        perror("bind");
+        exit(-1);
+    }
+    // 3. 通信
+    while (1) {
+        char recvbuf[128];
+        char ipbuf[16];
+
+        struct sockaddr_in cliaddr;
+        int len = sizeof(cliaddr);
+
+        // 接收数据
+        int num = recvfrom(connfd, recvbuf, sizeof(recvbuf), 0, (struct sockaddr *)&cliaddr, &len);
+
+        printf("client IP : %s, Port : %d\n", 
+            inet_ntop(AF_INET, &cliaddr.sin_addr.s_addr, ipbuf, sizeof(ipbuf)),
+            ntohs(cliaddr.sin_port));
+
+        printf("client say : %s\n", recvbuf);
+
+        // 发送数据
+        sendto(connfd, recvbuf, strlen(recvbuf) + 1, 0, (struct sockaddr *)&cliaddr, sizeof(cliaddr));
+    }
+    return 0;
+}
+```
+
+#### 客户端
+
+```c
+#include <stdio.h>
+#include <arpa/inet.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+
+#define SERVERIP "127.0.0.1"
+#define PORT 6789
+
+int main()
+{
+    // 1. 创建通信套接字
+    int connfd = socket(PF_INET, SOCK_DGRAM, 0);
+    // 2. 通信
+    // 设置服务器信息
+    struct sockaddr_in server_addr;
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_port = htons(PORT);
+    inet_pton(AF_INET, SERVERIP, &server_addr.sin_addr.s_addr);
+    int num = 0;
+    while (1) {
+        // 发送数据
+        char sendBuf[128];
+        sprintf(sendBuf, "hello , i am client %d \n", num++);
+        sendto(connfd, sendBuf, strlen(sendBuf) + 1, 0, (struct sockaddr *)&server_addr, sizeof(server_addr));
+
+        // 接收数据
+        int num = recvfrom(connfd, sendBuf, sizeof(sendBuf), 0, NULL, NULL);
+        printf("server say : %s\n", sendBuf);
+
+        sleep(1);
+    }
+    return 0;
+}
+```
+
