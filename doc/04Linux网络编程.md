@@ -3038,3 +3038,181 @@ int main()
 }
 ```
 
+## 本地套接字通信
+
+### 简介
+
+- 本地套接字的作用：本地的进程间通信，包括`有关系的进程通信(父子进程)`和`没有关系的进程间通信`
+- 本地套接字实现流程和网络套接字类似，一般采用`TCP的通信流程`
+
+### 通信流程
+
+- 服务端
+  1. 创建监听的套接字：`int lfd = socket(AF_UNIX/AF_LOCAL, SOCK_STREAM, 0);`
+  2. 监听的套接字绑定本地的套接字文件：`bind(lfd, addr, len); `，绑定成功之后，指定的`sun_path`中的套接字文件会自动生成
+  3. 监听：`listen(lfd, 100);`
+  4. 等待并接受连接请求：`int cfd = accept(lfd, &cliaddr, len);`
+  5. 通信
+     - 接收数据：`read/recv`
+     - 发送数据：`write/send`
+  6. 关闭连接：`close()`
+- 客户端
+  1. 创建通信的套接字：`int cfd = socket(AF_UNIX/AF_LOCAL, SOCK_STREAM, 0); `
+  2. 监听的套接字绑定本地的IP端口：`bind(cfd, &addr, len); `，绑定成功之后，指定的sun_path中的套接字文件会自动生成
+  3. 连接服务器：`connect(fd, &serveraddr, sizeof(serveraddr));`
+  4. 通信
+     - 接收数据：`read/recv`
+     - 发送数据：`write/send`
+  5. 关闭连接：`close()`
+
+### 注意事项
+
+- 地址结构体为：`struct sockaddr_un`类型
+
+  ```c
+  // 头文件: sys/un.h 
+  #define UNIX_PATH_MAX 108 
+  struct sockaddr_un { 
+      sa_family_t sun_family; // 地址族协议 af_local 
+      char sun_path[UNIX_PATH_MAX]; // 套接字文件的路径, 这是一个伪文件, 大小永远=0 
+  };
+  ```
+
+- 使用`unlink`解除占用：本地套接字通信通过文件，如果不用unlink解除占用，则会出现"bind: Address already in use"
+
+### 实例：本地进程间通信
+
+#### 服务端
+
+```c
+#include <stdio.h>
+#include <arpa/inet.h>
+#include <sys/un.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+
+int main()
+{
+    // 本地套接字通信通过文件，如果不用unlink解除占用，则会出现"bind: Address already in use"
+    unlink("server.sock");
+    // 1. 创建监听套接字
+    int listenfd = socket(PF_LOCAL, SOCK_STREAM, 0);
+    if (listenfd == -1) {
+        perror("socket");
+        exit(-1);
+    }
+    // 2. 绑定本地信息
+    struct sockaddr_un server_addr;
+    server_addr.sun_family = AF_LOCAL;
+    strcpy(server_addr.sun_path, "server.sock"); 
+    int ret = bind(listenfd, (struct sockaddr*)&server_addr, sizeof(server_addr));
+    if (ret == -1) {
+        perror("bind");
+        exit(-1);
+    }
+    // 3. 监听
+    ret = listen(listenfd, 8);
+    if (ret == -1) {
+        perror("listen");
+        exit(-1);
+    }
+    // 4. 接收连接
+    struct sockaddr_un client_addr;
+    int client_addr_len = sizeof(client_addr);
+    client_addr.sun_family = AF_LOCAL;
+    strcpy(server_addr.sun_path, "client.sock");
+    int connfd = accept(listenfd, (struct sockaddr*)&client_addr, &client_addr_len);
+    if (connfd == -1) {
+        perror("connect");
+        exit(-1);
+    }
+    // 5. 通信
+    while (1) {
+        // 接收信息
+        char buf[1024];
+        int buf_len = recv(connfd, buf, sizeof(buf), 0);
+        if (buf_len == -1) {
+            perror("recv");
+            exit(-1);
+        } else if (buf_len == 0) {
+            printf("client close...\n");
+            break;
+        } else {
+            printf("client say : %s\n", buf);
+            // 发送信息
+            send(connfd, buf, strlen(buf) + 1, 0);
+        }
+    }
+    // 6. 关闭套接字
+    close(connfd);
+    close(listenfd);
+    return 0;
+}
+```
+
+#### 客户端
+
+```c
+#include <stdio.h>
+#include <arpa/inet.h>
+#include <sys/un.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+
+int main()
+{
+    // 本地套接字通信通过文件，如果不用unlink解除占用，则会出现"bind: Address already in use"
+    unlink("client.sock");
+    // 1. 创建通信套接字
+    int connfd = socket(PF_LOCAL, SOCK_STREAM, 0);
+    if (connfd == -1) {
+        perror("socket");
+        exit(-1);
+    }
+    // 2. 绑定
+    struct sockaddr_un client_addr;
+    client_addr.sun_family = AF_LOCAL;
+    strcpy(client_addr.sun_path, "client.sock");
+    int ret = bind(connfd, (struct sockaddr*)&client_addr, sizeof(client_addr));
+    if (ret == -1) {
+        perror("bind");
+        exit(-1);
+    }
+    // 3. 建立连接
+    struct sockaddr_un server_addr;
+    server_addr.sun_family = AF_LOCAL;
+    strcpy(server_addr.sun_path, "server.sock");
+    ret = connect(connfd, (struct sockaddr*)&server_addr, sizeof(server_addr));
+    if (ret == -1) {
+        perror("connect");
+        exit(-1);
+    }
+    int num = 0;
+    // 5. 通信
+    while (1) {
+        // 发送信息
+        char buf[1024];
+        sprintf(buf, "the data is %d", num++);
+        send(connfd, buf, strlen(buf) + 1, 0);
+        // 接收信息
+        int buf_len = recv(connfd, buf, sizeof(buf), 0);
+        if (buf_len == -1) {
+            perror("recv");
+            exit(-1);
+        } else if (buf_len == 0) {
+            printf("server close...\n");
+            break;
+        } else {
+            printf("server say : %s\n", buf);
+        }
+        sleep(1);
+    }
+
+    // 6. 关闭套接字
+    close(connfd);
+    return 0;
+}
+```
+
