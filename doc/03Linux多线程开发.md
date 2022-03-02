@@ -820,10 +820,10 @@ int main() {
 - 初始化读写锁：`int pthread_rwlock_init(pthread_rwlock_t *restrict rwlock, const pthread_rwlockattr_t *restrict attr);`
 
 - 释放互斥量的资源：`int pthread_rwlock_destroy(pthread_rwlock_t *rwlock);`
-- 写操作加锁：`int pthread_rwlock_rdlock(pthread_rwlock_t *rwlock);`
-- 写操作尝试加锁：`int pthread_rwlock_tryrdlock(pthread_rwlock_t *rwlock);`
-- 读操作加锁：`int pthread_rwlock_wrlock(pthread_rwlock_t *rwlock);`
-- 读操作尝试加锁：`int pthread_rwlock_trywrlock(pthread_rwlock_t *rwlock);`
+- 读操作加锁：`int pthread_rwlock_rdlock(pthread_rwlock_t *rwlock);`
+- 读操作尝试加锁：`int pthread_rwlock_tryrdlock(pthread_rwlock_t *rwlock);`
+- 写操作加锁：`int pthread_rwlock_wrlock(pthread_rwlock_t *rwlock);`
+- 写操作尝试加锁：`int pthread_rwlock_trywrlock(pthread_rwlock_t *rwlock);`
 - 解锁：`int pthread_rwlock_unlock(pthread_rwlock_t *rwlock);`
 
 ### 实例：读写锁实现读线程数量大于写线程数量
@@ -855,7 +855,7 @@ void* workA(void* arg) {
 
 void* workB(void* arg) {
     while (1) {
-        // 加写锁
+        // 加读锁
         pthread_rwlock_rdlock(&rwlock);
         printf("===read, tid : %ld, num : %d\n", pthread_self(), num);
         // 解锁
